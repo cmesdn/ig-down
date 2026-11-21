@@ -1,3 +1,15 @@
 name = "igdownlod"
-main = "ig-down-worker.js"
+main = "index.js"
 compatibility_date = "2026-11-20"
+
+[[kv_namespaces]]
+binding = "CONFIG"
+id = "52acb4d5981742dbae61c093a0833049"
+
+[[d1_databases]]
+binding = "STATS"
+database_name = "igstats"
+database_id = "5880a5a9-bf8b-4b68-a680-c38c8edb136f"
+
+[triggers]
+crons = ["*/30 * * * *"]
