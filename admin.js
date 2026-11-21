@@ -71,6 +71,12 @@ const L = {
     d_intro: "প্রতিটা কুকি দিয়ে প্রতিটা মেথড চালিয়ে দেখায় কোনটা কী বলছে। কিছু ভেঙে গেলে সবার আগে এখানে দেখুন।",
     d_what: "যা দেখবেন", d_means: "মানে", d_fix: "করণীয়",
 
+    set_fb: "ফলব্যাক স্তর", set_proxy: "প্রক্সি", set_api: "বাইরের API (শেষ ভরসা)",
+    set_ptpl: "প্রক্সি URL টেমপ্লেট", set_phdr: "প্রক্সি হেডার (JSON)",
+    set_atpl: "API এন্ডপয়েন্ট টেমপ্লেট", set_ahdr: "API হেডার (JSON)",
+    g_layers: "সাইট এখন তিন স্তরে চেষ্টা করে, একটা ফেল করলে পরেরটা:\n\n১. প্রতিটা সচল cookie × ৪টা মেথড\n২. anonymous (cookie ছাড়া) × ৪টা মেথড — কিছু পাবলিক পোস্ট এভাবেও আসে\n৩. বাইরের API — নিচে সেট করলে\n\nঅর্থাৎ সব cookie মরে গেলেও সাইট পুরো শূন্য হবে না। তিন স্তর একসাথে ফেল করা প্রায় অসম্ভব।",
+    g_proxy: "Cloudflare-এর IP Instagram চেনে। ট্রাফিক বাড়লে প্রক্সি লাগবে।\n\nWorkers সাধারণ HTTP প্রক্সি সাপোর্ট করে না, তাই URL-ভিত্তিক প্রক্সি ব্যবহার করতে হয়। টেমপ্লেটে {url} লিখলে ওখানে আসল ঠিকানা বসে যাবে।\n\nউদাহরণ:\nhttps://api.example.com/fetch?key=ABC&url={url}\n\nহেডার লাগলে JSON-এ দিন:\n{\"X-API-Key\": \"abc123\"}\n\nখালি রাখলে কিছুই বদলায় না — সরাসরি Instagram-এ যাবে। দিনে ১ লাখের নিচে থাকলে দরকার নেই।",
+    g_api: "সব cookie মরে গেলে আর anonymous-ও কাজ না করলে এটা শেষ ভরসা।\n\nযেকোনো resolver API চলবে — উত্তরের গঠন যাই হোক, JSON-এর ভেতর .mp4 বা .jpg লিংক খুঁজে নেওয়া হয়।\n\nটেমপ্লেটে {url} বা {shortcode} ব্যবহার করুন:\nhttps://instagram-api.example.com/media?url={url}\n\nRapidAPI হলে হেডার:\n{\"X-RapidAPI-Key\": \"...\", \"X-RapidAPI-Host\": \"...\"}\n\nখরচ হয় (মাসে ~$৫-১৫), কিন্তু সাইট আক্ষরিক অর্থে কখনো বন্ধ হবে না। খালি রাখলে এই স্তরটা শুধু নিষ্ক্রিয় থাকবে।",
     h_broke: "কিছু ভেঙে গেলে — ক্রম অনুযায়ী যা করবেন",
     h_routine: "নিয়মিত রক্ষণাবেক্ষণ", h_growth: "বৃদ্ধির চেকলিস্ট", h_scale: "ফ্রি প্ল্যান ছাড়িয়ে গেলে",
   },
@@ -133,6 +139,12 @@ const L = {
     d_intro: "Runs every method against every cookie and shows exactly what each returns. This is the first place to look when something breaks.",
     d_what: "What you see", d_means: "What it means", d_fix: "Fix",
 
+    set_fb: "Fallback layers", set_proxy: "Proxy", set_api: "External API (last resort)",
+    set_ptpl: "Proxy URL template", set_phdr: "Proxy headers (JSON)",
+    set_atpl: "API endpoint template", set_ahdr: "API headers (JSON)",
+    g_layers: "The site now tries three layers, falling through as each fails:\n\n1. every live cookie × 4 methods\n2. anonymous (no cookie) × 4 methods — some public posts still come through\n3. external API — if configured below\n\nSo even with every cookie dead, the site is not completely down. All three failing at once is close to impossible.",
+    g_proxy: "Instagram recognises Cloudflare's IP ranges. As traffic grows you will need a proxy.\n\nWorkers cannot use ordinary HTTP proxies, so this takes a URL-based one. Put {url} in the template and the real address is substituted there.\n\nExample:\nhttps://api.example.com/fetch?key=ABC&url={url}\n\nIf it needs headers, give them as JSON:\n{\"X-API-Key\": \"abc123\"}\n\nLeave it empty and nothing changes — requests go straight to Instagram. Below 100k a day you do not need this.",
+    g_api: "The last resort, used only when every cookie is dead and anonymous fails too.\n\nAny resolver API works — whatever shape the response has, the JSON is scanned for .mp4 and .jpg links.\n\nUse {url} or {shortcode} in the template:\nhttps://instagram-api.example.com/media?url={url}\n\nFor RapidAPI, headers look like:\n{\"X-RapidAPI-Key\": \"...\", \"X-RapidAPI-Host\": \"...\"}\n\nIt costs money (roughly $5–15/month) but the site then literally cannot go down. Leave it blank and the layer simply stays off.",
     h_broke: "Something broke — what to do, in order",
     h_routine: "Routine upkeep", h_growth: "Growth checklist", h_scale: "Scaling past the free plan",
   },
@@ -268,6 +280,10 @@ async function runAction(action, form, env, lang) {
     cfg.settings.maintenance = form.get("maintenance") === "1";
     cfg.settings.telegramToken = String(form.get("tgToken") || "").trim();
     cfg.settings.telegramChat = String(form.get("tgChat") || "").trim();
+    cfg.settings.proxyTemplate = String(form.get("proxyTemplate") || "").trim();
+    cfg.settings.proxyHeaders = String(form.get("proxyHeaders") || "").trim();
+    cfg.settings.apiTemplate = String(form.get("apiTemplate") || "").trim();
+    cfg.settings.apiHeaders = String(form.get("apiHeaders") || "").trim();
     await saveConfig(env, cfg);
     return m.settings;
   }
@@ -282,7 +298,7 @@ async function runAction(action, form, env, lang) {
     const list = await getCookies(env);
     const value = normalizeCookie(String(form.get("value") || ""));
     if (!value) return m.needval;
-    const check = await testCookie(value);
+    const check = await testCookie(value, env);
     list.push({
       id: "c" + Date.now().toString(36),
       label: String(form.get("label") || "cookie " + (list.length + 1)).slice(0, 40),
@@ -300,7 +316,7 @@ async function runAction(action, form, env, lang) {
     const list = await getCookies(env);
     const c = list.find((x) => x.id === String(form.get("id") || ""));
     if (!c) return m.notfound;
-    const r = await testCookie(c.value);
+    const r = await testCookie(c.value, env);
     c.status = r.ok ? "ok" : "dead";
     c.fails = r.ok ? 0 : 3;
     if (r.ok) c.lastOk = Date.now();
@@ -613,6 +629,20 @@ function settingsTab(cfg, t) {
     <input name="tgToken" value="${esc(cfg.settings.telegramToken)}" placeholder="1234:AA...">
     <label>${t.set_chat}</label>
     <input name="tgChat" value="${esc(cfg.settings.telegramChat)}" placeholder="123456789">
+    <h3 style="margin-top:22px">${t.set_fb}</h3>
+    ${guide(t.guide, t.g_layers)}
+    <h3 style="margin-top:18px">${t.set_proxy} <span class="dim">${t.set_optional}</span></h3>
+    ${guide(t.guide, t.g_proxy)}
+    <label>${t.set_ptpl}</label>
+    <input name="proxyTemplate" value="${esc(cfg.settings.proxyTemplate || "")}" placeholder="https://api.example.com/fetch?key=ABC&url={url}">
+    <label>${t.set_phdr}</label>
+    <input name="proxyHeaders" value="${esc(cfg.settings.proxyHeaders || "")}" placeholder='{"X-API-Key":"abc123"}'>
+    <h3 style="margin-top:18px">${t.set_api} <span class="dim">${t.set_optional}</span></h3>
+    ${guide(t.guide, t.g_api)}
+    <label>${t.set_atpl}</label>
+    <input name="apiTemplate" value="${esc(cfg.settings.apiTemplate || "")}" placeholder="https://some-api.example.com/ig?url={url}">
+    <label>${t.set_ahdr}</label>
+    <input name="apiHeaders" value="${esc(cfg.settings.apiHeaders || "")}" placeholder='{"X-RapidAPI-Key":"..."}'>
     <button class="btn">${t.set_savebtn}</button>
   </form>
 </div>

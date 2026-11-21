@@ -1,5 +1,13 @@
 /**
- * resolve.js — Instagram resolver, cookie pool, edge cache, signed links
+ * resolve.js — Instagram resolver
+ *
+ * Reliability layers, tried in order until one works:
+ *   1. every live cookie  × 4 methods
+ *   2. anonymous (no cookie) × 4 methods      <- works for some public posts
+ *   3. external resolver API (optional)       <- last resort, set in /admin
+ *
+ * Optional proxy: every outbound Instagram request can be routed through a
+ * URL-template proxy, set in /admin. Leave it empty and nothing changes.
  */
 
 import { getConfig, getCookies, saveCookies, pickOrder, logEvent, notify } from "./store.js";
@@ -11,7 +19,7 @@ const APP_UA =
 const APP_ID = "936619743392459";
 const DOC_ID = "10015901848480474";
 const LINK_TTL = 7200;
-const PROBE = "https://www.instagram.com/reel/C5Qf0xAr9Jx/"; // public reel used for health checks
+const PROBE = "https://www.instagram.com/reel/C5Qf0xAr9Jx/";
 
 /* ========================= public API ========================= */
 
@@ -23,12 +31,9 @@ export function shortcode(input) {
   return null;
 }
 
-/**
- * Resolve a shortcode to media + metadata.
- * Order: edge cache -> cookie pool x methods -> cache store.
- */
 export async function resolveMedia(code, env, ctx, opts = {}) {
   const cfg = await getConfig(env);
+  const net = netFrom(cfg);
   const salt = cfg.settings.cacheSalt || 0;
   const cacheKey = new Request("https://cache.igto/v3/" + salt + "/" + code);
   const cache = caches.default;
@@ -46,16 +51,15 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
   const cookies = await getCookies(env);
   const order = pickOrder(cookies);
   const attempts = [];
-  let result = null;
-  let usedCookie = null;
+  let result = null, usedCookie = null;
 
-  // anonymous first only when there are no cookies at all
-  const candidates = order.length ? order : [{ id: "anon", value: "" }];
+  // layer 1 + 2: every live cookie, then anonymous
+  const candidates = order.concat([{ id: "__anon", label: "anonymous", value: "" }]);
 
   outer: for (const ck of candidates) {
     for (const fn of METHODS) {
       try {
-        const r = await fn(code, ck.value);
+        const r = await fn(code, ck.value, net);
         if (r && r.items.length) {
           result = r;
           usedCookie = ck;
@@ -66,16 +70,29 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
       } catch (e) {
         const msg = (e && e.message) || String(e);
         attempts.push({ cookie: ck.id, method: fn.name, ok: false, error: msg });
-        // auth failure -> this cookie is suspect, stop trying it and move to the next one
         if (/401|403|login wall|checkpoint|challenge/i.test(msg) && fn === METHODS[0]) break;
       }
+    }
+  }
+
+  // layer 3: external resolver API
+  if (!result && net.apiTemplate) {
+    try {
+      const r = await viaExternalApi(code, "", net);
+      if (r && r.items.length) {
+        result = r;
+        attempts.push({ cookie: "external", method: "external-api", ok: true });
+      }
+    } catch (e) {
+      attempts.push({ cookie: "external", method: "external-api", ok: false, error: (e && e.message) || String(e) });
     }
   }
 
   const ms = Date.now() - t0;
 
   if (ctx) {
-    ctx.waitUntil(markCookies(env, cookies, usedCookie, candidates, !!result));
+    const real = candidates.filter((c) => c.id !== "__anon");
+    ctx.waitUntil(markCookies(env, cookies, usedCookie && usedCookie.id !== "__anon" ? usedCookie : null, real, !!result && usedCookie && usedCookie.id !== "__anon"));
     ctx.waitUntil(
       logEvent(env, {
         kind: "resolve",
@@ -83,7 +100,7 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
         method: result ? result.via : "",
         ms,
         country: opts.country || "",
-        err: result ? "" : (attempts.length ? attempts[attempts.length - 1].error : "no attempt"),
+        err: result ? "" : attempts.length ? attempts[attempts.length - 1].error : "no attempt",
       })
     );
   }
@@ -113,7 +130,6 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
   return payload;
 }
 
-/** turn raw media into signed, client-ready JSON */
 async function decorate(media, code, env) {
   const items = [];
   for (let i = 0; i < media.items.length; i++) {
@@ -127,6 +143,7 @@ async function decorate(media, code, env) {
       quality: it.width ? it.width + "×" + it.height : "Original",
       duration: it.duration || null,
       thumb: it.thumb ? await signed("/img", it.thumb, "thumb.jpg", env) : null,
+      play: it.type === "video" ? await signed("/stream", it.url, "v.mp4", env) : null,
       url: await signed("/dl", it.url, name, env),
     });
   }
@@ -146,114 +163,41 @@ async function decorate(media, code, env) {
   };
 }
 
-/* ===================== cookie health bookkeeping ===================== */
+/* ===================== networking ===================== */
 
-async function markCookies(env, all, used, tried, success) {
-  let changed = false;
-  const byId = new Map(all.map((c) => [c.id, c]));
-
-  if (success && used && byId.has(used.id)) {
-    const c = byId.get(used.id);
-    c.fails = 0;
-    c.uses = (c.uses || 0) + 1;
-    c.lastOk = Date.now();
-    if (c.status !== "ok") { c.status = "ok"; }
-    changed = true;
-    // every cookie tried before the winner failed
-    for (const t of tried) {
-      if (t.id === used.id) break;
-      const f = byId.get(t.id);
-      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
-    }
-  } else if (!success) {
-    for (const t of tried) {
-      const f = byId.get(t.id);
-      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
-    }
-  }
-
-  if (!changed) return;
-  let died = [];
-  for (const c of all) {
-    if (c.fails >= 3 && c.status !== "dead") { c.status = "dead"; died.push(c.label || c.id); }
-    else if (c.fails > 0 && c.fails < 3 && c.status === "ok") c.status = "warn";
-  }
-  await saveCookies(env, all);
-
-  if (died.length) await notify(env, "⚠️ IGtoDownload: cookie dead — " + died.join(", "));
-  if (all.length && all.every((c) => c.status === "dead")) {
-    await notify(env, "🚨 IGtoDownload: ALL cookies are dead. Downloads are failing. Add a fresh sessionid in /admin.");
-  }
+function netFrom(cfg) {
+  const s = cfg.settings || {};
+  let ph = {}, ah = {};
+  try { if (s.proxyHeaders) ph = JSON.parse(s.proxyHeaders); } catch (_) {}
+  try { if (s.apiHeaders) ah = JSON.parse(s.apiHeaders); } catch (_) {}
+  return {
+    proxyTemplate: (s.proxyTemplate || "").trim(),
+    proxyHeaders: ph,
+    apiTemplate: (s.apiTemplate || "").trim(),
+    apiHeaders: ah,
+  };
 }
 
-/** cron: test every cookie against a known public reel */
-export async function healthCheck(env) {
-  const list = await getCookies(env);
-  if (!list.length) return { checked: 0 };
-  const code = shortcode(PROBE);
-  let revived = 0;
-  for (const c of list) {
-    try {
-      const r = await viaMobileApi(code, c.value);
-      if (r && r.items.length) {
-        if (c.status === "dead") revived++;
-        c.status = "ok";
-        c.fails = 0;
-        c.lastOk = Date.now();
-      }
-    } catch (e) {
-      c.fails = (c.fails || 0) + 1;
-      c.lastError = ((e && e.message) || "").slice(0, 80);
-      if (c.fails >= 3) c.status = "dead";
-      else if (c.status === "ok") c.status = "warn";
-    }
+/** every Instagram call goes through here, so the proxy is a one-line switch */
+async function go(url, init, net) {
+  if (net && net.proxyTemplate) {
+    const target = net.proxyTemplate.includes("{url}")
+      ? net.proxyTemplate.replace("{url}", encodeURIComponent(url))
+      : net.proxyTemplate + encodeURIComponent(url);
+    const headers = Object.assign({}, init.headers || {}, net.proxyHeaders || {});
+    return fetch(target, Object.assign({}, init, { headers }));
   }
-  await saveCookies(env, list);
-  const live = list.filter((c) => c.status !== "dead").length;
-  if (!live) await notify(env, "🚨 IGtoDownload: health check found 0 working cookies.");
-  return { checked: list.length, live, revived };
-}
-
-/** admin: test one cookie value directly */
-export async function testCookie(value) {
-  const code = shortcode(PROBE);
-  const t0 = Date.now();
-  try {
-    const r = await viaMobileApi(code, value);
-    return { ok: !!(r && r.items.length), ms: Date.now() - t0 };
-  } catch (e) {
-    return { ok: false, ms: Date.now() - t0, error: (e && e.message) || String(e) };
-  }
-}
-
-/** admin diagnostics: run every method with every cookie */
-export async function diagnose(code, env) {
-  const cookies = await getCookies(env);
-  const pool = cookies.length ? cookies : [{ id: "anon", label: "no cookie", value: "" }];
-  const rows = [];
-  for (const c of pool) {
-    for (const fn of METHODS) {
-      const t0 = Date.now();
-      try {
-        const r = await fn(code, c.value);
-        rows.push({ cookie: c.label || c.id, method: fn.name, ok: !!(r && r.items.length), items: r ? r.items.length : 0, ms: Date.now() - t0 });
-      } catch (e) {
-        rows.push({ cookie: c.label || c.id, method: fn.name, ok: false, error: (e && e.message) || String(e), ms: Date.now() - t0 });
-      }
-    }
-  }
-  return rows;
+  return fetch(url, init);
 }
 
 /* ========================= methods ========================= */
 
-async function viaMobileApi(code, cookie) {
+async function viaMobileApi(code, cookie, net) {
   const id = mediaId(code);
   if (!id) throw new Error("bad shortcode");
-  const r = await fetch("https://i.instagram.com/api/v1/media/" + id + "/info/", { headers: appHeaders(cookie) });
+  const r = await go("https://i.instagram.com/api/v1/media/" + id + "/info/", { headers: appHeaders(cookie) }, net);
   const txt = await r.text();
   if (isHtml(txt)) throw new Error("login wall (html " + r.status + ")");
-  if (r.status === 401 || r.status === 403) throw new Error("http " + r.status);
   if (!r.ok) throw new Error("http " + r.status);
 
   const j = JSON.parse(txt);
@@ -277,8 +221,7 @@ async function viaMobileApi(code, cookie) {
   else push(first);
 
   return {
-    via: "mobile-api",
-    items,
+    via: "mobile-api", items,
     username: get(first, ["user", "username"]),
     fullName: get(first, ["user", "full_name"]),
     avatar: get(first, ["user", "profile_pic_url"]),
@@ -290,13 +233,13 @@ async function viaMobileApi(code, cookie) {
   };
 }
 
-async function viaGraphQL(code, cookie) {
+async function viaGraphQL(code, cookie, net) {
   const body = new URLSearchParams({ doc_id: DOC_ID, variables: JSON.stringify({ shortcode: code }) });
-  const r = await fetch("https://www.instagram.com/api/graphql", {
+  const r = await go("https://www.instagram.com/api/graphql", {
     method: "POST",
     headers: webHeaders(cookie, { "content-type": "application/x-www-form-urlencoded" }),
     body,
-  });
+  }, net);
   const txt = await r.text();
   if (isHtml(txt)) throw new Error("login wall (html " + r.status + ")");
   const j = JSON.parse(txt);
@@ -315,8 +258,7 @@ async function viaGraphQL(code, cookie) {
   else push(m);
 
   return {
-    via: "graphql",
-    items,
+    via: "graphql", items,
     username: get(m, ["owner", "username"]),
     fullName: get(m, ["owner", "full_name"]),
     avatar: get(m, ["owner", "profile_pic_url"]),
@@ -328,8 +270,8 @@ async function viaGraphQL(code, cookie) {
   };
 }
 
-async function viaEmbed(code, cookie) {
-  const r = await fetch("https://www.instagram.com/p/" + code + "/embed/captioned/", { headers: webHeaders(cookie) });
+async function viaEmbed(code, cookie, net) {
+  const r = await go("https://www.instagram.com/p/" + code + "/embed/captioned/", { headers: webHeaders(cookie) }, net);
   const html = await r.text();
   const vid = unesc(html.match(/"video_url"\s*:\s*"([^"]+)"/));
   if (!vid) throw new Error("video_url not found");
@@ -340,8 +282,8 @@ async function viaEmbed(code, cookie) {
   };
 }
 
-async function viaOgTag(code, cookie) {
-  const r = await fetch("https://www.instagram.com/reel/" + code + "/", { headers: webHeaders(cookie) });
+async function viaOgTag(code, cookie, net) {
+  const r = await go("https://www.instagram.com/reel/" + code + "/", { headers: webHeaders(cookie) }, net);
   const html = await r.text();
   const vid = (html.match(/property=["']og:video["']\s+content=["']([^"']+)["']/) || html.match(/content=["']([^"']+)["']\s+property=["']og:video["']/) || [])[1];
   if (!vid) throw new Error("og:video not found");
@@ -349,9 +291,147 @@ async function viaOgTag(code, cookie) {
   return { via: "og", items: [{ type: "video", url: deHtml(vid), thumb: thumb && deHtml(thumb) }] };
 }
 
+/**
+ * Last resort. Set an endpoint template in /admin, e.g.
+ *   https://some-api.example.com/ig?url={url}
+ * Response shape does not matter: the JSON is scanned for media URLs.
+ */
+async function viaExternalApi(code, _cookie, net) {
+  if (!net.apiTemplate) throw new Error("no external api configured");
+  const postUrl = "https://www.instagram.com/reel/" + code + "/";
+  const target = net.apiTemplate.includes("{url}")
+    ? net.apiTemplate.replace("{url}", encodeURIComponent(postUrl))
+    : net.apiTemplate.replace("{shortcode}", code);
+  const r = await go(target, { headers: Object.assign({ accept: "application/json" }, net.apiHeaders) }, null);
+  if (!r.ok) throw new Error("api http " + r.status);
+  const txt = await r.text();
+  let j;
+  try { j = JSON.parse(txt); } catch { throw new Error("api returned non-json"); }
+
+  const urls = scanUrls(j);
+  const vids = urls.filter((u) => /\.mp4(\?|$)/i.test(u));
+  const imgs = urls.filter((u) => /\.(jpe?g|webp)(\?|$)/i.test(u));
+  if (!vids.length && !imgs.length) throw new Error("api gave no media url");
+
+  const items = vids.length
+    ? [{ type: "video", url: vids[0], thumb: imgs[0] || null }]
+    : [{ type: "image", url: imgs[0], thumb: imgs[0] }];
+  return { via: "external-api", items };
+}
+
+function scanUrls(o, out = []) {
+  if (typeof o === "string") {
+    if (/^https?:\/\/[^\s"]+\.(mp4|jpe?g|webp)(\?|$)/i.test(o)) out.push(o);
+  } else if (Array.isArray(o)) o.forEach((x) => scanUrls(x, out));
+  else if (o && typeof o === "object") Object.values(o).forEach((x) => scanUrls(x, out));
+  return out;
+}
+
 const METHODS = [viaMobileApi, viaGraphQL, viaEmbed, viaOgTag];
 
-/* ========================= proxies ========================= */
+/* ===================== cookie health ===================== */
+
+async function markCookies(env, all, used, tried, success) {
+  let changed = false;
+  const byId = new Map(all.map((c) => [c.id, c]));
+
+  if (success && used && byId.has(used.id)) {
+    const c = byId.get(used.id);
+    c.fails = 0; c.uses = (c.uses || 0) + 1; c.lastOk = Date.now(); c.status = "ok";
+    changed = true;
+    for (const t of tried) {
+      if (t.id === used.id) break;
+      const f = byId.get(t.id);
+      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
+    }
+  } else {
+    for (const t of tried) {
+      const f = byId.get(t.id);
+      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
+    }
+  }
+  if (!changed) return;
+
+  const died = [];
+  for (const c of all) {
+    if (c.fails >= 3 && c.status !== "dead") { c.status = "dead"; died.push(c.label || c.id); }
+    else if (c.fails > 0 && c.fails < 3 && c.status === "ok") c.status = "warn";
+  }
+  await saveCookies(env, all);
+  if (died.length) await notify(env, "⚠️ IGtoDownload: cookie dead — " + died.join(", "));
+  if (all.length && all.every((c) => c.status === "dead"))
+    await notify(env, "🚨 IGtoDownload: ALL cookies are dead. Running on fallbacks only. Add a fresh sessionid in /admin.");
+}
+
+export async function healthCheck(env) {
+  const cfg = await getConfig(env);
+  const net = netFrom(cfg);
+  const list = await getCookies(env);
+  if (!list.length) return { checked: 0, live: 0, revived: 0 };
+  const code = shortcode(PROBE);
+  let revived = 0;
+  for (const c of list) {
+    try {
+      const r = await viaMobileApi(code, c.value, net);
+      if (r && r.items.length) {
+        if (c.status === "dead") revived++;
+        c.status = "ok"; c.fails = 0; c.lastOk = Date.now(); c.lastError = "";
+      }
+    } catch (e) {
+      c.fails = (c.fails || 0) + 1;
+      c.lastError = ((e && e.message) || "").slice(0, 80);
+      if (c.fails >= 3) c.status = "dead";
+      else if (c.status === "ok") c.status = "warn";
+    }
+  }
+  await saveCookies(env, list);
+  const live = list.filter((c) => c.status !== "dead").length;
+  if (!live) await notify(env, "🚨 IGtoDownload: health check found 0 working cookies.");
+  return { checked: list.length, live, revived };
+}
+
+export async function testCookie(value, env) {
+  const net = env ? netFrom(await getConfig(env)) : null;
+  const code = shortcode(PROBE);
+  const t0 = Date.now();
+  try {
+    const r = await viaMobileApi(code, value, net);
+    return { ok: !!(r && r.items.length), ms: Date.now() - t0 };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - t0, error: (e && e.message) || String(e) };
+  }
+}
+
+export async function diagnose(code, env) {
+  const cfg = await getConfig(env);
+  const net = netFrom(cfg);
+  const cookies = await getCookies(env);
+  const pool = cookies.concat([{ id: "__anon", label: "anonymous", value: "" }]);
+  const rows = [];
+  for (const c of pool) {
+    for (const fn of METHODS) {
+      const t0 = Date.now();
+      try {
+        const r = await fn(code, c.value, net);
+        rows.push({ cookie: c.label || c.id, method: fn.name, ok: !!(r && r.items.length), items: r ? r.items.length : 0, ms: Date.now() - t0 });
+      } catch (e) {
+        rows.push({ cookie: c.label || c.id, method: fn.name, ok: false, error: (e && e.message) || String(e), ms: Date.now() - t0 });
+      }
+    }
+  }
+  if (net.apiTemplate) {
+    const t0 = Date.now();
+    try {
+      const r = await viaExternalApi(code, "", net);
+      rows.push({ cookie: "external api", method: "external-api", ok: !!(r && r.items.length), items: r ? r.items.length : 0, ms: Date.now() - t0 });
+    } catch (e) {
+      rows.push({ cookie: "external api", method: "external-api", ok: false, error: (e && e.message) || String(e), ms: Date.now() - t0 });
+    }
+  }
+  return rows;
+}
+
+/* ===================== proxies ===================== */
 
 export async function handleDownload(request, url, env) {
   const v = await verifyLink(url, env);
@@ -376,22 +456,38 @@ export async function handleDownload(request, url, env) {
   return new Response(upstream.body, { status: upstream.status, headers: h });
 }
 
+/** same media, but inline — used by the tap-to-play preview */
+export async function handleStream(request, url, env) {
+  const v = await verifyLink(url, env);
+  if (v.error) return new Response(v.error, { status: v.status });
+  const range = request.headers.get("range");
+  const upstream = await fetch(v.target, {
+    headers: Object.assign({ "user-agent": WEB_UA, referer: "https://www.instagram.com/" }, range ? { range } : {}),
+  });
+  if (!upstream.ok && upstream.status !== 206) return new Response("upstream " + upstream.status, { status: 502 });
+  const h = new Headers();
+  h.set("content-type", "video/mp4");
+  h.set("accept-ranges", "bytes");
+  h.set("cache-control", "private, max-age=600");
+  for (const k of ["content-length", "content-range"]) {
+    const val = upstream.headers.get(k);
+    if (val) h.set(k, val);
+  }
+  return new Response(upstream.body, { status: upstream.status, headers: h });
+}
+
 export async function handleImage(url, env) {
   const v = await verifyLink(url, env);
   if (v.error) return new Response(v.error, { status: v.status });
   const upstream = await fetch(v.target, { headers: { "user-agent": WEB_UA, referer: "https://www.instagram.com/" } });
   if (!upstream.ok) return new Response("upstream " + upstream.status, { status: 502 });
   return new Response(upstream.body, {
-    headers: {
-      "content-type": upstream.headers.get("content-type") || "image/jpeg",
-      "cache-control": "public, max-age=3600",
-    },
+    headers: { "content-type": upstream.headers.get("content-type") || "image/jpeg", "cache-control": "public, max-age=3600" },
   });
 }
 
 async function verifyLink(url, env) {
-  const t = url.searchParams.get("t");
-  const s = url.searchParams.get("s");
+  const t = url.searchParams.get("t"), s = url.searchParams.get("s");
   if (!t || !s) return { error: "missing token", status: 400 };
   if (!(await verifySig(t, s, env))) return { error: "bad signature", status: 403 };
   let p;
@@ -400,7 +496,7 @@ async function verifyLink(url, env) {
   return { target: p.u };
 }
 
-/* ========================= signing ========================= */
+/* ===================== signing ===================== */
 
 async function key(env) {
   const secret = (env && env.SIGN_SECRET) || "igtodownload-default-change-me";
@@ -416,29 +512,18 @@ async function verifySig(t, s, env) {
   catch { return false; }
 }
 
-/* ========================= helpers ========================= */
+/* ===================== helpers ===================== */
 
 function appHeaders(cookie) {
-  const h = {
-    "user-agent": APP_UA,
-    "x-ig-app-id": APP_ID,
-    "x-ig-capabilities": "3brTvw==",
-    "x-ig-connection-type": "WIFI",
-    "accept-language": "en-US",
-    accept: "*/*",
-  };
+  const h = { "user-agent": APP_UA, "x-ig-app-id": APP_ID, "x-ig-capabilities": "3brTvw==", "x-ig-connection-type": "WIFI", "accept-language": "en-US", accept: "*/*" };
   if (cookie) h.cookie = cookie;
   return h;
 }
 function webHeaders(cookie, extra) {
   const h = {
-    "user-agent": WEB_UA,
-    "x-ig-app-id": APP_ID,
-    "accept-language": "en-US,en;q=0.9",
-    referer: "https://www.instagram.com/",
-    origin: "https://www.instagram.com",
-    "sec-fetch-site": "same-origin",
-    "x-requested-with": "XMLHttpRequest",
+    "user-agent": WEB_UA, "x-ig-app-id": APP_ID, "accept-language": "en-US,en;q=0.9",
+    referer: "https://www.instagram.com/", origin: "https://www.instagram.com",
+    "sec-fetch-site": "same-origin", "x-requested-with": "XMLHttpRequest",
   };
   if (cookie) h.cookie = cookie;
   return Object.assign(h, extra || {});

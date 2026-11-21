@@ -15,6 +15,13 @@ export const DEFAULT_CONFIG = {
     adsEnabled: true,
     telegramToken: "",
     telegramChat: "",
+    cacheSalt: 0,
+    // optional: route Instagram calls through a URL-template proxy
+    proxyTemplate: "",
+    proxyHeaders: "",
+    // optional: last-resort external resolver API
+    apiTemplate: "",
+    apiHeaders: "",
   },
   ads: {},
   seo: {},

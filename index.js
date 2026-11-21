@@ -4,9 +4,10 @@
  */
 
 import { getConfig, prune } from "./store.js";
-import { resolveMedia, handleDownload, handleImage, healthCheck, shortcode } from "./resolve.js";
+import { resolveMedia, handleDownload, handleStream, handleImage, healthCheck, shortcode } from "./resolve.js";
 import { handleAdmin } from "./admin.js";
 import { route, render, sitemap, robots, esc } from "./pages.js";
+import { ogImage, appIcon } from "./assets.js";
 
 const HITS = new Map(); // in-isolate rate limit: ip -> {n, reset}
 
@@ -28,8 +29,13 @@ export default {
       if (path === "/robots.txt")
         return new Response(robots(origin), { headers: { "content-type": "text/plain", "cache-control": "public, max-age=3600" } });
 
+      // --- static assets
+      if (path === "/og.jpg" || path === "/og.png") return ogImage();
+      if (path === "/apple-touch-icon.png" || path === "/apple-touch-icon-precomposed.png") return appIcon();
+
       // --- media proxies
       if (path === "/dl") return await handleDownload(request, url, env);
+      if (path === "/stream") return await handleStream(request, url, env);
       if (path === "/img") return await handleImage(url, env);
 
       // --- api
