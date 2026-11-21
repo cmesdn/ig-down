@@ -170,7 +170,7 @@ export async function audience(env) {
       opens7: await one("SELECT COUNT(*) n FROM events WHERE kind='app_open' AND day>=?", d7),
       shares7: await one("SELECT COUNT(*) n FROM events WHERE kind='share_in' AND day>=?", d7),
       recent:
-        (await env.STATS.prepare("SELECT id, created, title, countries, target, sent, failed, gone, clicks, done FROM broadcasts ORDER BY id DESC LIMIT 8").all())
+        (await env.STATS.prepare("SELECT id, created, title, image, countries, target, sent, failed, gone, clicks, done FROM broadcasts ORDER BY id DESC LIMIT 10").all())
           .results || [],
     };
   } catch (_) {

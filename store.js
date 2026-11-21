@@ -125,6 +125,13 @@ export function flushCookieCache() {
   MEM.ckExp = 0;
 }
 
+/** After a reset, forget everything cached in this isolate. */
+export function flushAll() {
+  MEM.cfg = null; MEM.cfgExp = 0;
+  MEM.ck = null; MEM.ckExp = 0;
+  MEM.probe = null; MEM.probeExp = 0;
+}
+
 /**
  * Healthy cookies first, in round-robin order so load spreads evenly.
  * Dead ones are appended rather than dropped: if every cookie is marked dead
@@ -247,7 +254,7 @@ export async function getStats(env) {
 export async function prune(env) {
   if (!env.STATS) return;
   try {
-    const cut = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+    const cut = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     await env.STATS.prepare("DELETE FROM events WHERE day < ?").bind(cut).run();
   } catch (_) {}
 }

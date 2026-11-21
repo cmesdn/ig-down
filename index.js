@@ -14,6 +14,7 @@ import { pushIfChanged, getVapid } from "./push.js";
 import { siteManifest, SITE_SW, handleShare } from "./app.js";
 import { subscribeUser, unsubscribeUser, latestBroadcast, countClick } from "./broadcast.js";
 import { logEvent } from "./store.js";
+import { track, pruneVisits } from "./visits.js";
 
 const HITS = new Map(); // in-isolate rate limit: ip -> {n, reset}
 
@@ -57,6 +58,21 @@ export default {
         const body = await request.json().catch(() => ({}));
         return cors(json(await unsubscribeUser(env, body && body.endpoint)));
       }
+      // live presence + visit beacon (fire-and-forget from the page)
+      if (path === "/api/p" && request.method === "POST") {
+        const body = await request.json().catch(() => null);
+        ctx.waitUntil(track(env, request, body).catch(() => {}));
+        return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*" } });
+      }
+
+      // pictures uploaded for notifications
+      const nm = path.match(/^\/n\/([a-z0-9]{6,24})\.jpg$/);
+      if (nm) {
+        const img = await env.CONFIG.get("nimg:" + nm[1], { type: "arrayBuffer" });
+        if (!img) return new Response("not found", { status: 404 });
+        return new Response(img, { headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=2592000, immutable" } });
+      }
+
       if (path === "/api/event" && request.method === "POST") {
         const body = await request.json().catch(() => ({}));
         const k = String((body && body.k) || "");
@@ -165,6 +181,7 @@ export default {
       (async () => {
         await healthCheck(env);
         await prune(env);
+        await pruneVisits(env);
         // decide whether the phone needs to buzz
         try {
           const cfg = await getConfig(env);

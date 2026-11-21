@@ -8,6 +8,8 @@ import { testCookie, healthCheck } from "./resolve.js";
 import { siteStatus, statusLine, fullDiagnose, quickCheck } from "./monitor.js";
 import { getVapid, addSub, removeSub, clearSubs, pushAll, getSubs } from "./push.js";
 import { createBroadcast, sendBatch, audience } from "./broadcast.js";
+import { liveNow, report, resetData } from "./visits.js";
+import { flushAll } from "./store.js";
 import { esc } from "./pages.js";
 
 const SESSION_HOURS = 24;
@@ -20,7 +22,7 @@ const L = {
     admin: "এডমিন", signout: "সাইন আউট", signin: "সাইন ইন", password: "পাসওয়ার্ড",
     wrongpw: "ভুল পাসওয়ার্ড।", toomany: "অনেকবার ভুল হয়েছে। কয়েক মিনিট পর আবার চেষ্টা করুন।",
     guide: "📖 গাইড দেখুন", save: "সেভ করুন",
-    tabs: { monitor: "লাইভ", home: "ড্যাশবোর্ড", users: "ইউজার ও অ্যাপ", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
+    tabs: { monitor: "লাইভ", visitors: "ভিজিটর", home: "ড্যাশবোর্ড", users: "নোটিফিকেশন", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
 
     a_nocookie: "এখনো কোনো সেশন কুকি নেই। কুকি ট্যাবে গিয়ে একটা যোগ করুন, নইলে কোনো ডাউনলোড হবে না।",
     a_alldead: "সব কুকি মৃত। সাইট এখন কিছুই ডাউনলোড করতে পারছে না। কুকি ট্যাবে নতুন sessionid যোগ করুন।",
@@ -107,7 +109,7 @@ const L = {
     admin: "admin", signout: "Sign out", signin: "Sign in", password: "Password",
     wrongpw: "Wrong password.", toomany: "Too many attempts. Try again in a few minutes.",
     guide: "📖 Show guide", save: "Save",
-    tabs: { monitor: "Live", home: "Dashboard", users: "Users & app", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
+    tabs: { monitor: "Live", visitors: "Visitors", home: "Dashboard", users: "Notify", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
 
     a_nocookie: "No session cookies yet. Downloads will fail until you add one in the Cookies tab.",
     a_alldead: "Every cookie is dead. The site cannot download anything right now. Add a fresh sessionid in the Cookies tab.",
@@ -306,6 +308,33 @@ async function handleApi(api, request, url, env, lang) {
     }
     case "bsend":
       return json(await sendBatch(env, url.searchParams.get("id")));
+    case "live":
+      return json(await liveNow(env));
+    case "visitors":
+      return json(Object.assign(await report(env, url.searchParams.get("days")), { live: await liveNow(env) }));
+    case "reset": {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      const b = await request.json().catch(() => ({}));
+      if (b.confirm !== "Confirmed")
+        return json({ error: lang === "bn" ? "ঠিক Confirmed লিখতে হবে (বড় হাতের C)।" : "Type Confirmed exactly (capital C)." }, 400);
+      const scope = b.scope === "all" ? "all" : "stats";
+      const done = await resetData(env, scope);
+      flushAll();
+      return json({ ok: true, scope, cleared: done });
+    }
+    case "nimg": {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      const b = await request.json().catch(() => ({}));
+      const m = String(b.data || "").match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+      if (!m) return json({ error: "JPEG only" }, 400);
+      const bin = atob(m[1]);
+      if (bin.length > 450_000) return json({ error: lang === "bn" ? "ছবিটা অনেক বড়।" : "Picture too large." }, 400);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const id = (Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 16);
+      await env.CONFIG.put("nimg:" + id, bytes.buffer, { expirationTtl: 90 * 86400 });
+      return json({ ok: true, url: "/n/" + id + ".jpg", size: bin.length });
+    }
     default:
       return json({ error: "unknown api" }, 404);
   }
@@ -486,7 +515,7 @@ async function body(tab, env, msg, lang) {
   const cfg = await getConfig(env);
   const cookies = await getCookies(env);
   const live = cookies.filter((c) => c.status !== "dead").length;
-  const order = ["monitor", "home", "users", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const order = ["monitor", "visitors", "users", "cookies", "ads", "seo", "settings", "diag", "help"];
 
   let alert = "";
   if (!cookies.length) alert = bad(t.a_nocookie);
@@ -496,13 +525,14 @@ async function body(tab, env, msg, lang) {
 
   const panes = {
     monitor: () => monitorTab(cfg, t, lang),
+    visitors: () => visitorsTab(lang),
     users: () => usersTab(env, cfg, t, lang),
     home: () => homeTab(env, cookies, t),
     cookies: () => cookiesTab(cookies, t),
     ads: () => adsTab(cfg, t, lang),
     seo: () => seoTab(cfg, t, lang),
     settings: () => settingsTab(cfg, t),
-    diag: () => diagTab(t, lang),
+    diag: async () => diagTab(t, lang) + (await opsBox(env, t)),
     help: () => helpTab(lang),
   };
 
@@ -538,6 +568,7 @@ function monitorTab(cfg, t, lang) {
   <div class="minis" id="minis"></div>
   <div class="row" style="margin-top:12px">
     <button class="btn ghost" onclick="poll(true)">${t.mo_refresh}</button>
+    ${postBtn("cache_clear", "monitor", t.clearcache, "ghost")}
     <button class="btn ghost" onclick="runHealth()">${t.c_healthnow}</button>
   </div>
   <pre id="healthout" class="out hide"></pre>
@@ -601,6 +632,72 @@ function monitorTab(cfg, t, lang) {
 </div>`;
 }
 
+/* ---------- visitors ---------- */
+
+const V = {
+  bn: {
+    live: "এখন সাইটে আছে", livehint: "গত ৩ মিনিটে সক্রিয় · নিজে নিজে হালনাগাদ হয়",
+    inapp: "অ্যাপ থেকে", countries: "কোন দেশ থেকে", pages: "কোন পেজে", devices: "কোন ডিভাইস",
+    p1: "আজ", p7: "৭ দিন", p30: "৩০ দিন", p90: "৯০ দিন",
+    visits: "ভিজিট", pageviews: "পেজ দেখা", downloads: "ডাউনলোড", conv: "ডাউনলোড হার", installs: "অ্যাপ ইনস্টল",
+    daily: "প্রতিদিন — ভিজিট আর ডাউনলোড", hourly: "আজ, ঘণ্টা অনুযায়ী (UTC)", sources: "কোথা থেকে এসেছে", appsplit: "অ্যাপ বনাম ব্রাউজার",
+    app: "অ্যাপ", web: "ব্রাউজার", none: "এখনো ডেটা নেই", totals: "সারসংক্ষেপ",
+    keep: "সব ডেটা ৯০ দিন রাখা হয়, তারপর নিজে নিজেই মুছে যায়। পুরো রিসেট করতে চাইলে সেটিংস ট্যাবের একদম নিচে দেখুন।",
+    g:
+      "এই সংখ্যাগুলো কীভাবে গোনা হয়:\n\n• ভিজিট — একটা ব্রাউজার ট্যাব খোলা থেকে বন্ধ হওয়া পর্যন্ত একটা ভিজিট। একই মানুষ সকালে আর রাতে এলে দুটো ভিজিট।\n• এখন সাইটে আছে — গত ৩ মিনিটে যাদের পাতা খোলা ছিল। পাতা খোলা থাকলে প্রতি ২ মিনিটে একটা ছোট সংকেত আসে।\n• ডাউনলোড হার — কত শতাংশ ভিজিটে অন্তত একটা সফল ডাউনলোড হয়েছে।\n\nকোনো কুকি বা ব্যক্তিগত তথ্য রাখা হয় না — শুধু দেশ, ডিভাইসের ধরন আর কোন পেজ। Google বা অন্য বট গোনা হয় না।\n\nGoogle Analytics-এর সংখ্যার সাথে পুরোপুরি মিলবে না — ওরা ভিন্নভাবে গোনে। প্রবণতা দেখার জন্য দুটোই ঠিক আছে।",
+    src: { google: "Google", bing: "Bing", instagram: "Instagram", facebook: "Facebook", youtube: "YouTube", tiktok: "TikTok", x: "X / Twitter", telegram: "Telegram", whatsapp: "WhatsApp", direct: "সরাসরি / বুকমার্ক", "other search": "অন্য সার্চ", other: "অন্যান্য" },
+    dev: { android: "Android", ios: "iPhone", desktop: "কম্পিউটার", other: "অন্যান্য" },
+  },
+  en: {
+    live: "On the site right now", livehint: "Active in the last 3 minutes · updates by itself",
+    inapp: "in the app", countries: "Countries", pages: "Pages", devices: "Devices",
+    p1: "Today", p7: "7 days", p30: "30 days", p90: "90 days",
+    visits: "Visits", pageviews: "Page views", downloads: "Downloads", conv: "Download rate", installs: "App installs",
+    daily: "Daily — visits and downloads", hourly: "Today by hour (UTC)", sources: "Where they came from", appsplit: "App vs browser",
+    app: "App", web: "Browser", none: "No data yet", totals: "Summary",
+    keep: "Everything is kept for 90 days and then deleted automatically. For a full reset, see the bottom of the Settings tab.",
+    g:
+      "How these are counted:\n\n• Visit — one browser tab from opening to closing. Someone who comes in the morning and again at night is two visits.\n• On the site now — anyone whose page was open in the last 3 minutes. An open page sends a tiny signal every 2 minutes.\n• Download rate — the share of visits with at least one successful download.\n\nNo cookies or personal data are stored — only country, device type and page. Google and other bots are not counted.\n\nNumbers will not match Google Analytics exactly; it counts differently. Both are fine for spotting trends.",
+    src: { google: "Google", bing: "Bing", instagram: "Instagram", facebook: "Facebook", youtube: "YouTube", tiktok: "TikTok", x: "X / Twitter", telegram: "Telegram", whatsapp: "WhatsApp", direct: "Direct / bookmark", "other search": "Other search", other: "Other" },
+    dev: { android: "Android", ios: "iPhone", desktop: "Computer", other: "Other" },
+  },
+};
+
+function visitorsTab(lang) {
+  const T = V[lang];
+  return `
+<div class="box livebox">
+  <div class="stathead"><h3>${T.live}</h3><span class="age" id="vAge"></span></div>
+  <div class="livebig"><span class="livedot"></span><b id="vLive">—</b><span id="vApp" class="dim"></span></div>
+  <p class="dim">${T.livehint}</p>
+  <div class="two" style="margin-top:12px">
+    <div><h4 class="mh">${T.countries}</h4><div id="vLC" class="bars"></div></div>
+    <div><h4 class="mh">${T.pages}</h4><div id="vLP" class="bars"></div></div>
+  </div>
+</div>
+
+<div class="seg" id="vSeg">
+  <button data-d="1">${T.p1}</button><button data-d="7" class="on">${T.p7}</button><button data-d="30">${T.p30}</button><button data-d="90">${T.p90}</button>
+</div>
+
+<div class="cards" id="vCards"></div>
+${guide("📖 " + (lang === "bn" ? "সংখ্যাগুলো কীভাবে গোনা হয়" : "How the numbers are counted"), T.g)}
+
+<div class="box"><h3>${T.daily}</h3><div class="chart2" id="vDaily"></div><div class="legend"><span><i class="lv"></i>${T.visits}</span><span><i class="ld"></i>${T.downloads}</span></div></div>
+<div class="box"><h3>${T.hourly}</h3><div class="chart2 hours" id="vHours"></div></div>
+
+<div class="two">
+  <div class="box"><h3>${T.sources}</h3><div id="vSrc" class="bars"></div></div>
+  <div class="box"><h3>${T.countries}</h3><div id="vCtry" class="bars"></div></div>
+</div>
+<div class="two">
+  <div class="box"><h3>${T.pages}</h3><div id="vPages" class="bars"></div></div>
+  <div class="box"><h3>${T.devices}</h3><div id="vDev" class="bars"></div><h4 class="mh" style="margin-top:14px">${T.appsplit}</h4><div id="vSplit" class="bars"></div></div>
+</div>
+<p class="dim" style="margin:4px 2px 0">${T.keep}</p>
+<script>window.__V=${JSON.stringify({ T: { visits: T.visits, pageviews: T.pageviews, downloads: T.downloads, conv: T.conv, installs: T.installs, none: T.none, app: T.app, web: T.web, inapp: T.inapp }, src: T.src, dev: T.dev }).replace(/</g, "\\u003c")};</script>`;
+}
+
 /* ---------- users & app ---------- */
 
 const U = {
@@ -614,7 +711,14 @@ const U = {
     optin: "নোটিফিকেশন নেওয়ার প্রস্তাব", pon: "প্রস্তাব চালু", pafter: "কতগুলো সফল ডাউনলোডের পরে প্রস্তাব দেবে",
     ptitle: "প্রস্তাবের শিরোনাম", psub: "প্রস্তাবের ছোট লেখা", pbtn: "বাটনের লেখা",
     save: "সেভ করুন",
-    compose: "ইউজারদের নোটিফিকেশন পাঠান",
+    compose: "নোটিফিকেশন পাঠান",
+    pvhint: "প্রিভিউ — চাপলে বড় হয়ে ছবিসহ দেখাবে, ঠিক যেমন ফোনে নামিয়ে দেখলে দেখায়",
+    now: "এখন", phT: "নতুন: Share করলেই ডাউনলোড", phB: "Instagram-এ রিল দেখছেন? Share চাপুন, IGtoDownload বেছে নিন — হয়ে গেল।",
+    pic: "ছবি (ঐচ্ছিক)", upload: "📷 ফোন থেকে ছবি দিন", remove: "সরান", orlink: "অথবা ছবির লিংক পেস্ট করুন",
+    pichint: "পাশাপাশি লম্বা (২:১) ছবি সবচেয়ে সুন্দর দেখায়, যেমন ১০২৪×৫১২। ফোন থেকে দিলে নিজে নিজেই ছোট করে নেওয়া হবে। শুধু Android-এ ছবি দেখায়।",
+    linkto: "চাপলে কোথায় যাবে", home: "হোম", custom: "অন্য লিংক",
+    audience: "কারা পাবে", all: "সবাই", reach: "জন পাবেন", sendTo: "জনকে পাঠান", confirmSend: "জনের কাছে এই নোটিফিকেশন যাবে। পাঠাবেন?",
+    nosubs: "এই দেশে এখনো কেউ নোটিফিকেশন নেয়নি।", uploading: "ছবি তোলা হচ্ছে...",
     ntitle: "শিরোনাম", nbody: "বার্তা", nurl: "ক্লিক করলে কোথায় যাবে", nimg: "ছবির লিংক (ঐচ্ছিক)",
     ncountry: "দেশ (ঐচ্ছিক) — যেমন BD, IN, PK। খালি রাখলে সবাই পাবে",
     send: "পাঠান", sending: "পাঠানো হচ্ছে...", preview: "যেমন দেখাবে",
@@ -636,7 +740,14 @@ const U = {
     optin: "Notification opt-in offer", pon: "Offer on", pafter: "Offer after N successful downloads",
     ptitle: "Offer title", psub: "Offer text", pbtn: "Button text",
     save: "Save",
-    compose: "Send a notification to users",
+    compose: "Send a notification",
+    pvhint: "Preview — tap it to expand with the picture, exactly as it looks when pulled down on a phone",
+    now: "now", phT: "New: share a reel to download it", phB: "Watching a reel on Instagram? Tap Share, pick IGtoDownload — done.",
+    pic: "Picture (optional)", upload: "📷 Pick a picture from the phone", remove: "Remove", orlink: "or paste a picture link",
+    pichint: "Wide (2:1) pictures look best, e.g. 1024×512. Pictures from the phone are resized automatically. Pictures show on Android only.",
+    linkto: "Where a tap goes", home: "Home", custom: "Other link",
+    audience: "Who receives it", all: "Everyone", reach: "people will receive it", sendTo: "Send to", confirmSend: "people will receive this notification. Send it?",
+    nosubs: "Nobody in this country has opted in yet.", uploading: "Uploading picture...",
     ntitle: "Title", nbody: "Message", nurl: "Where a tap goes", nimg: "Image link (optional)",
     ncountry: "Countries (optional) — e.g. BD, IN, PK. Empty means everyone",
     send: "Send", sending: "Sending...", preview: "Preview",
@@ -660,36 +771,48 @@ async function usersTab(env, cfg, t, lang) {
   const d = (ts) => new Date(ts).toLocaleDateString(lang === "bn" ? "bn-BD" : "en-GB", { day: "numeric", month: "short" });
 
   return `
-<div class="cards">
-  ${stat(T.subs, a.subscribers)}
-  ${stat(T.inst7, a.installs7)}
-  ${stat(T.inst30, a.installs30)}
-  ${stat(T.opens, a.opens7)}
-  ${stat(T.shares, a.shares7)}
-</div>
-
-<div class="box">
-  <h3>${T.bycountry}</h3>
-  ${a.countries.length
-    ? `<table><tr><th>${t.country}</th><th>#</th></tr>${a.countries.map((c) => `<tr><td>${esc(c.country)}</td><td>${c.n}</td></tr>`).join("")}</table>`
-    : `<p class="dim">${T.none}</p>`}
-</div>
-
-<div class="box">
+<div class="box composer">
   <h3>${T.compose}</h3>
   ${guide(t.guide, T.g_compose)}
-  <label>${T.ntitle}</label>
-  <input id="nTitle" maxlength="80" placeholder="New: share any reel to download it">
-  <label>${T.nbody}</label>
-  <textarea id="nBody" rows="3" maxlength="220" placeholder="Open Instagram, tap Share on a reel, pick IGtoDownload — done."></textarea>
-  <label>${T.nurl}</label>
-  <input id="nUrl" value="/" placeholder="/ or /reels or a full link">
-  <label>${T.nimg}</label>
-  <input id="nImg" placeholder="https://...jpg">
-  <label>${T.ncountry}</label>
-  <input id="nCountry" placeholder="BD, IN">
-  <div class="npreview" id="nPrev"><img src="/icon-192.png" alt=""><div><b id="pvT">—</b><span id="pvB">—</span></div></div>
-  <div class="row"><button class="btn" id="nSend" onclick="sendBroadcast()">${T.send}</button></div>
+
+  <div class="pvhint">${T.pvhint}</div>
+  <div class="anotif" id="aN" onclick="this.classList.toggle('open')">
+    <div class="an-head"><span class="an-ic"></span><span>${esc(cfg.brand.name)}</span><span class="an-dot">·</span><span>${T.now}</span><span class="an-chev">⌄</span></div>
+    <div class="an-main">
+      <div class="an-tx"><b id="pvT">${T.ntitle}</b><span id="pvB">${T.nbody}</span></div>
+      <img class="an-thumb" id="pvThumb" alt="" hidden>
+    </div>
+    <img class="an-big" id="pvBig" alt="" hidden>
+  </div>
+
+  <label>${T.ntitle} <span class="dim cnt" id="cT">0/50</span></label>
+  <input id="nTitle" maxlength="80" placeholder="${T.phT}">
+  <label>${T.nbody} <span class="dim cnt" id="cB">0/180</span></label>
+  <textarea id="nBody" rows="3" maxlength="220" placeholder="${T.phB}"></textarea>
+
+  <label>${T.pic}</label>
+  <div class="picrow">
+    <label class="btn ghost upbtn">${T.upload}<input type="file" id="nFile" accept="image/*" hidden></label>
+    <div class="picprev" id="picPrev" hidden><img id="picImg" alt=""><button type="button" class="mini danger" onclick="clearPic()">${T.remove}</button></div>
+  </div>
+  <input id="nImg" placeholder="${T.orlink}">
+  <p class="dim">${T.pichint}</p>
+
+  <label>${T.linkto}</label>
+  <div class="chips" id="lChips">
+    <button type="button" data-u="/" class="on">${T.home}</button><button type="button" data-u="/reels">Reels</button><button type="button" data-u="/video">Video</button><button type="button" data-u="/photo">Photo</button><button type="button" data-u="/story">Story</button><button type="button" data-u="/blog">Blog</button><button type="button" data-u="">${T.custom}</button>
+  </div>
+  <input id="nUrl" value="/" class="hide" placeholder="https://...">
+
+  <label>${T.audience}</label>
+  <div class="chips" id="cChips">
+    <button type="button" data-c="" data-n="${a.subscribers}" class="on">${T.all} · ${a.subscribers}</button>
+    ${a.countries.map((c) => `<button type="button" data-c="${esc(c.country)}" data-n="${c.n}">${esc(c.country)} · ${c.n}</button>`).join("")}
+  </div>
+  <input id="nCountry" type="hidden">
+  <p class="reach" id="reach"></p>
+
+  <button class="btn sendbtn" id="nSend" onclick="sendBroadcast()">${T.send}</button>
   <div class="progress hide" id="nProg"><span id="nBar"></span></div>
   <p class="dim" id="nStat"></p>
 </div>
@@ -697,10 +820,26 @@ async function usersTab(env, cfg, t, lang) {
 <div class="box">
   <h3>${T.recent}</h3>
   ${a.recent.length
-    ? `<table class="wide"><tr><th>${T.c_date}</th><th>${T.c_title}</th><th>${T.c_target}</th><th>${T.c_sent}</th><th>${T.c_fail}</th><th>${T.c_click}</th></tr>${a.recent
-        .map((r) => `<tr><td>${d(r.created)}</td><td>${esc(r.title)}${r.countries ? ` <span class="dim">(${esc(r.countries)})</span>` : ""}</td><td>${r.target}</td><td>${r.sent}</td><td>${r.failed + r.gone}</td><td>${r.clicks}</td></tr>`)
-        .join("")}</table>`
+    ? `<div class="hist">${a.recent
+        .map((r) => {
+          const ctr = r.sent ? Math.round((r.clicks / r.sent) * 100) : 0;
+          return `<div class="hcard">${r.image ? `<img src="${esc(r.image)}" alt="">` : `<span class="hnoimg"></span>`}
+            <div class="hbody"><b>${esc(r.title)}</b><span class="dim">${d(r.created)}${r.countries ? " · " + esc(r.countries) : ""}${r.done ? "" : " · …"}</span>
+            <div class="hstats"><span>${T.c_target} <b>${r.target}</b></span><span>${T.c_sent} <b>${r.sent}</b></span><span>${T.c_click} <b>${r.clicks}</b></span><span>CTR <b>${ctr}%</b></span></div></div></div>`;
+        })
+        .join("")}</div>`
     : `<p class="dim">${T.none}</p>`}
+</div>
+
+<div class="box">
+  <h3>${T.stats}</h3>
+  <div class="cards" style="margin:0">
+    ${stat(T.subs, a.subscribers)}
+    ${stat(T.inst7, a.installs7)}
+    ${stat(T.inst30, a.installs30)}
+    ${stat(T.opens, a.opens7)}
+    ${stat(T.shares, a.shares7)}
+  </div>
 </div>
 
 <div class="box">
@@ -729,7 +868,7 @@ async function usersTab(env, cfg, t, lang) {
     <button class="btn">${T.save}</button>
   </form>
 </div>
-<script>window.__U=${JSON.stringify({ sending: T.sending, send: T.send }).replace(/</g, "\\u003c")};</script>`;
+<script>window.__U=${JSON.stringify({ sending: T.sending, send: T.send, sendTo: T.sendTo, reach: T.reach, confirm: T.confirmSend, nosubs: T.nosubs, ntitle: T.ntitle, nbody: T.nbody, uploading: T.uploading }).replace(/</g, "\\u003c")};</script>`;
 }
 
 /* ---------- dashboard ---------- */
@@ -1012,7 +1151,8 @@ function settingsTab(cfg, t) {
     <input name="pw2" type="password" autocomplete="new-password">
     <button class="btn">${t.set_pwbtn}</button>
   </form>
-</div>`;
+</div>
+${resetBox(t === L.bn ? "bn" : "en")}`;
 }
 
 /* ---------- diagnostics ---------- */
@@ -1033,6 +1173,28 @@ function diagTab(t, lang) {
       ? "সাইট পরপর কয়েকটা পদ্ধতি চেষ্টা করে এবং প্রথমটা সফল হলেই থেমে যায়। তাই নিচে কিছু লাল সারি থাকা স্বাভাবিক — একটা সবুজ থাকলেই ইউজাররা ভিডিও পাবে। প্রতিটা সারিতে কী হয়েছে, তার মানে কী, আর কী করতে হবে — তিনটাই সহজ ভাষায় লেখা থাকে।"
       : "The site tries several routes in order and stops at the first success, so some red rows are normal — one green row means visitors get the video. Each row explains what happened, what it means and what to do, in plain words."
   }</p>
+</div>`;
+}
+
+/* ---------- which route works / common errors (moved from the old dashboard) ---------- */
+
+async function opsBox(env, t) {
+  const st = await getStats(env);
+  return `
+<div class="two">
+  <div class="box">
+    <h3>${t.whichmethod}</h3>
+    ${st.methods.length
+      ? `<table><tr><th>${t.method}</th><th>${t.tries}</th><th>${t.ok}</th></tr>${st.methods.map((m) => `<tr><td>${esc(m.method || "—")}</td><td>${m.n}</td><td>${m.ok}</td></tr>`).join("")}</table>`
+      : `<p class="dim">${t.nodata}</p>`}
+    ${guide(t.guide, t.g_method)}
+  </div>
+  <div class="box">
+    <h3>${t.comerr}</h3>
+    ${st.errors.length
+      ? `<table><tr><th>${t.error}</th><th>${t.count}</th></tr>${st.errors.map((e) => `<tr><td>${esc(e.err)}</td><td>${e.n}</td></tr>`).join("")}</table>`
+      : `<p class="dim">${t.nodata}</p>`}
+  </div>
 </div>`;
 }
 
@@ -1099,6 +1261,30 @@ const HELP = {
     ]},
   ],
 };
+
+
+/* ---------- danger zone ---------- */
+
+function resetBox(lang) {
+  const bn = lang === "bn";
+  return `
+<div class="box danger">
+  <h3>${bn ? "ডেটা মুছে ফেলা ও রিসেট" : "Erase data and reset"}</h3>
+  <p class="dim">${bn
+    ? "সব পরিসংখ্যান এমনিতেই ৯০ দিন পর নিজে নিজে মুছে যায়। এখানে চাইলে এখনই মুছে ফেলতে পারেন। এটা ফেরানো যায় না।"
+    : "All statistics are deleted automatically after 90 days anyway. Here you can erase them right now. This cannot be undone."}</p>
+  <label class="check"><input type="radio" name="rscope" value="stats" checked> <span><b>${bn ? "শুধু পরিসংখ্যান" : "Statistics only"}</b><br><span class="dim">${bn
+    ? "ভিজিট, ডাউনলোডের হিসাব, ইভেন্ট, নোটিফিকেশনের ইতিহাস। কুকি, অ্যাড, সেটিংস যেমন আছে থাকবে।"
+    : "Visits, download counts, events, notification history. Cookies, ads and settings stay as they are."}</span></span></label>
+  <label class="check"><input type="radio" name="rscope" value="all"> <span><b>${bn ? "পুরো প্যানেল" : "The whole panel"}</b><br><span class="dim">${bn
+    ? "উপরের সব, সাথে নোটিফিকেশন নেওয়া ইউজার, সব কুকি, অ্যাড কোড, SEO আর সব সেটিংস। শুধু আপনার পাসওয়ার্ড থাকবে, যাতে আবার ঢুকতে পারেন।"
+    : "Everything above, plus notification subscribers, all cookies, ad codes, SEO and every setting. Only your password is kept, so you can still sign in."}</span></span></label>
+  <label>${bn ? "নিশ্চিত করতে লিখুন: <code>Confirmed</code>" : "To confirm, type: <code>Confirmed</code>"}</label>
+  <input id="rConfirm" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Confirmed">
+  <button class="btn dangerbtn" id="rBtn" disabled onclick="doReset()">${bn ? "মুছে ফেলুন" : "Erase"}</button>
+  <p class="dim" id="rOut"></p>
+</div>`;
+}
 
 /* ===================== bits ===================== */
 
@@ -1215,8 +1401,14 @@ body.bare{display:grid;place-items:center;min-height:100vh;padding:20px}
 .lang a.on{background:#262630;color:#fff}
 .mid-lang{margin:16px auto 0;width:fit-content}
 .out{color:#8c8c9b;text-decoration:none;font-size:13px;border:1px solid #26262f;padding:7px 12px;border-radius:9px}
-.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:14px;-webkit-overflow-scrolling:touch}
-.tabs a{white-space:nowrap;padding:8px 14px;border-radius:10px;background:#15151d;border:1px solid #23232c;color:#9a9aa8;text-decoration:none;font-size:13.5px;font-weight:600}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px}
+@media(min-width:720px){.tabs{grid-template-columns:repeat(9,auto);justify-content:start}}
+.tabs a{display:flex;align-items:center;justify-content:center;text-align:center;min-height:38px;padding:7px 8px;border-radius:11px;
+  background:#15151d;border:1px solid #23232c;color:#9a9aa8;text-decoration:none;font-size:13px;font-weight:600;line-height:1.25;
+  -webkit-tap-highlight-color:transparent;transition:transform .15s ease}
+.tabs a:active{transform:scale(.96)}
+table.wide{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;margin:0 -2px;padding:0 2px}
 .tabs a.on{background:linear-gradient(100deg,#ff8a3d,#f9377d 48%,#8a3ffc);color:#fff;border-color:transparent}
 .msg{background:rgba(43,217,124,.1);border:1px solid rgba(43,217,124,.35);padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}
 .alert{padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}
@@ -1268,6 +1460,71 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 .slothead select{width:auto;padding:6px 9px;font-size:12.5px;margin-left:auto}
 .out{background:#0d0d13;border:1px solid #26262f;border-radius:10px;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;margin-top:12px;max-height:340px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}
 .hide{display:none}
+#nBody{font-family:inherit;font-size:14px;line-height:1.55}
+.pvhint{font-size:12px;color:#8c8c9b;margin:4px 0 8px}
+.anotif{background:#1d1d27;border-radius:22px;padding:13px 15px;cursor:pointer;-webkit-tap-highlight-color:transparent;
+  box-shadow:0 10px 30px rgba(0,0,0,.35);transition:background .2s;user-select:none}
+.an-head{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#a6a6b5}
+.an-ic{width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#ff8a3d,#f9377d 50%,#8a3ffc);flex:none;position:relative}
+.an-ic::after{content:"";position:absolute;left:5px;top:3px;width:6px;height:6px;border-right:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(45deg)}
+.an-dot{opacity:.6}.an-chev{margin-left:auto;font-size:14px;transition:transform .25s}
+.anotif.open .an-chev{transform:rotate(180deg)}
+.an-main{display:flex;gap:12px;align-items:flex-start;margin-top:7px}
+.an-tx{flex:1;min-width:0}
+.an-tx b{display:block;font-size:14.5px;font-weight:600;color:#f0f0f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.an-tx span{display:block;font-size:13.5px;color:#c4c4d0;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.anotif.open .an-tx span{white-space:normal}
+.an-thumb{width:44px;height:44px;border-radius:9px;object-fit:cover;flex:none}
+.anotif.open .an-thumb{display:none}
+.an-big{display:none;width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:14px;margin-top:11px}
+.anotif.open .an-big:not([hidden]){display:block}
+.cnt{float:right;font-weight:500}
+.cnt.over{color:#ffaa3c}
+.picrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.upbtn{margin-top:0;position:relative}
+.picprev{display:flex;align-items:center;gap:8px}
+.picprev img{width:72px;height:36px;object-fit:cover;border-radius:7px;border:1px solid #26262f}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{background:#15151d;border:1px solid #26262f;color:#b9b9c6;border-radius:20px;padding:7px 12px;font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer}
+.chips button.on{background:rgba(249,55,125,.16);border-color:rgba(249,55,125,.55);color:#fff}
+.reach{margin-top:10px;font-size:14px;font-weight:600}
+.sendbtn{width:100%;padding:14px;font-size:15px}
+.hist{display:grid;gap:8px}
+.hcard{display:flex;gap:11px;background:#0f0f16;border:1px solid #1e1e27;border-radius:13px;padding:10px;align-items:flex-start}
+.hcard img,.hnoimg{width:64px;height:32px;border-radius:7px;object-fit:cover;flex:none;background:linear-gradient(135deg,#ff8a3d33,#8a3ffc33)}
+.hbody{min-width:0;flex:1}
+.hbody b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hbody .dim{font-size:12px;margin-top:1px}
+.hstats{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12px;color:#8c8c9b}
+.hstats b{display:inline;color:#ececf1;font-size:12px}
+.livebox{background:linear-gradient(160deg,#16131f,#13131a 60%)}
+.livebig{display:flex;align-items:center;gap:12px;margin-top:10px}
+.livebig b{font-size:46px;font-weight:800;letter-spacing:-1.5px;line-height:1}
+.livedot{width:12px;height:12px;border-radius:50%;background:#2bd97c;box-shadow:0 0 0 0 rgba(43,217,124,.5);animation:ldot 1.8s ease-out infinite;flex:none}
+@keyframes ldot{0%{box-shadow:0 0 0 0 rgba(43,217,124,.45)}100%{box-shadow:0 0 0 14px rgba(43,217,124,0)}}
+.mh{font-size:12px;color:#8c8c9b;font-weight:600;margin-bottom:7px;text-transform:uppercase;letter-spacing:.6px}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:#15151d;border:1px solid #23232c;border-radius:12px;padding:4px;margin-bottom:12px}
+.seg button{background:none;border:0;color:#9a9aa8;font-weight:600;font-size:13px;padding:9px 4px;border-radius:9px;font-family:inherit;cursor:pointer}
+.seg button.on{background:#262630;color:#fff}
+.bars{display:grid;gap:7px}
+.bar2{position:relative;background:#0f0f16;border:1px solid #1e1e27;border-radius:9px;padding:8px 10px;font-size:13px;display:flex;justify-content:space-between;gap:8px;overflow:hidden}
+.bar2 i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,rgba(249,55,125,.22),rgba(138,63,252,.18));border-radius:9px}
+.bar2 span,.bar2 b{position:relative;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar2 b{flex:none}
+.chart2{display:flex;align-items:flex-end;gap:2px;height:120px;margin-top:8px}
+.chart2 .c{flex:1;display:flex;align-items:flex-end;gap:1px;height:100%;min-width:0}
+.chart2 .c span{flex:1;border-radius:3px 3px 0 0;min-height:2px}
+.chart2 .v{background:linear-gradient(180deg,#f9377d,#8a3ffc)}
+.chart2 .d{background:#2bd97c}
+.chart2.hours .c span{background:linear-gradient(180deg,#ff8a3d,#f9377d)}
+.legend{display:flex;gap:14px;margin-top:8px;font-size:12px;color:#8c8c9b}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.legend .lv{background:#f9377d}.legend .ld{background:#2bd97c}
+.danger{border-color:rgba(255,92,138,.35)}
+.danger label.check{align-items:flex-start;margin-top:12px}
+.danger label.check input{margin-top:4px}
+.dangerbtn{background:#ff3d6e}
+.dangerbtn:disabled{opacity:.4;cursor:not-allowed}
 .npreview{display:flex;gap:11px;align-items:center;background:#0f0f16;border:1px solid #23232c;border-radius:13px;padding:12px;margin-top:14px}
 .npreview img{width:38px;height:38px;border-radius:9px;flex:none}
 .npreview b{display:block;font-size:14px}
@@ -1480,33 +1737,112 @@ async function doInstall(){
 }
 
 /* ---------- user notifications ---------- */
+var UU=window.__U||{};
 function pv(){
-  var t=el('nTitle'), b=el('nBody'); if(!t)return;
-  el('pvT').textContent=t.value||'\u2014'; el('pvB').textContent=b.value||'\u2014';
+  var t=el('nTitle'), b=el('nBody'); if(!t) return;
+  el('pvT').textContent=t.value||UU.ntitle||'—';
+  el('pvB').textContent=b.value||UU.nbody||'—';
+  var ct=el('cT'), cb=el('cB');
+  ct.textContent=t.value.length+'/50'; ct.classList.toggle('over',t.value.length>50);
+  cb.textContent=b.value.length+'/180'; cb.classList.toggle('over',b.value.length>180);
+  var img=el('nImg').value.trim();
+  var th=el('pvThumb'), big=el('pvBig');
+  if(img){ th.src=img; big.src=img; th.hidden=false; big.hidden=false; el('aN').classList.add('open'); }
+  else { th.hidden=true; big.hidden=true; }
 }
-['nTitle','nBody'].forEach(function(id){ var x=el(id); if(x) x.addEventListener('input',pv); });
+['nTitle','nBody','nImg'].forEach(function(id){ var x=el(id); if(x) x.addEventListener('input',pv); });
+
+function clearPic(){ el('nImg').value=''; el('picPrev').hidden=true; pv(); }
+
+/* pictures from the phone: shrink to at most 1024px wide, JPEG, then upload */
+(function(){
+  var f=el('nFile'); if(!f) return;
+  f.addEventListener('change',function(){
+    var file=f.files&&f.files[0]; if(!file) return;
+    var st=el('nStat'); st.textContent=UU.uploading||'...';
+    var img=new Image(), url=URL.createObjectURL(file);
+    img.onload=function(){
+      var w=img.naturalWidth, h=img.naturalHeight, max=1024;
+      if(w>max){ h=Math.round(h*max/w); w=max; }
+      if(h>max){ w=Math.round(w*max/h); h=max; }
+      var c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);
+      var q=0.85, data=c.toDataURL('image/jpeg',q);
+      while(data.length>560000 && q>0.4){ q-=0.1; data=c.toDataURL('image/jpeg',q); }
+      fetch('/admin?api=nimg',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({data:data})})
+        .then(function(r){return r.json()}).then(function(d){
+          if(d.error){ st.textContent=d.error; return; }
+          el('nImg').value=d.url; el('picImg').src=d.url; el('picPrev').hidden=false;
+          st.textContent='✓ '+Math.round(d.size/1024)+' KB'; pv();
+        }).catch(function(){ st.textContent='Upload failed.'; });
+    };
+    img.onerror=function(){ st.textContent='Could not read that picture.'; };
+    img.src=url; f.value='';
+  });
+})();
+
+/* where a tap goes */
+(function(){
+  var box=el('lChips'); if(!box) return;
+  box.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    [].forEach.call(box.children,function(x){x.classList.toggle('on',x===b)});
+    var u=b.getAttribute('data-u'), inp=el('nUrl');
+    if(u){ inp.value=u; inp.classList.add('hide'); } else { inp.value=''; inp.classList.remove('hide'); inp.focus(); }
+  });
+})();
+
+/* who receives it: "Everyone" or any mix of countries */
+function reach(){
+  var box=el('cChips'); if(!box) return 0;
+  var on=[].filter.call(box.children,function(x){return x.classList.contains('on')});
+  var all=on.length===1&&on[0].getAttribute('data-c')==='';
+  var n=on.reduce(function(s,x){return s+(+x.getAttribute('data-n')||0)},0);
+  el('nCountry').value=all?'':on.map(function(x){return x.getAttribute('data-c')}).join(',');
+  el('reach').textContent=n+' '+(UU.reach||'');
+  el('nSend').textContent=/[\u0980-\u09FF]/.test(UU.sendTo||'')?(n+' '+UU.sendTo):((UU.sendTo||'Send to')+' '+n);
+  return n;
+}
+(function(){
+  var box=el('cChips'); if(!box) return;
+  box.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    var everyone=box.children[0];
+    if(b===everyone){ [].forEach.call(box.children,function(x){x.classList.toggle('on',x===everyone)}); }
+    else {
+      b.classList.toggle('on'); everyone.classList.remove('on');
+      if(![].some.call(box.children,function(x){return x.classList.contains('on')})) everyone.classList.add('on');
+    }
+    reach();
+  });
+  reach(); pv();
+})();
+
 async function sendBroadcast(){
-  var U=window.__U||{sending:'Sending...',send:'Send'};
-  var body={title:el('nTitle').value,body:el('nBody').value,url:el('nUrl').value,image:el('nImg').value,countries:el('nCountry').value};
-  if(!body.title.trim()||!body.body.trim()){alert('Title and message are required.');return}
-  if(!confirm('Send this notification now?'))return;
-  var btn=el('nSend'); btn.disabled=true; btn.textContent=U.sending;
+  var body={title:el('nTitle').value.trim(),body:el('nBody').value.trim(),url:el('nUrl').value.trim()||'/',image:el('nImg').value.trim(),countries:el('nCountry').value};
+  if(!body.title||!body.body){ alert((UU.ntitle||'Title')+' + '+(UU.nbody||'Message')); el(!body.title?'nTitle':'nBody').focus(); return; }
+  var n=reach();
+  if(!n){ alert(UU.nosubs||'No subscribers yet.'); return; }
+  if(!confirm(n+' '+(UU.confirm||'people will receive this. Send?'))) return;
+  var btn=el('nSend'); btn.disabled=true; btn.textContent=UU.sending||'Sending...';
   el('nProg').classList.remove('hide'); el('nBar').style.width='2%';
   try{
     var r=await fetch('/admin?api=bcreate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     var c=await r.json(); if(c.error) throw new Error(c.error);
-    if(!c.target){ el('nStat').textContent='No subscribers match yet. Nothing was sent.'; el('nBar').style.width='100%'; return; }
-    var s; var guard=0;
+    if(!c.target){ el('nStat').textContent=UU.nosubs||'Nothing sent.'; el('nBar').style.width='100%'; return; }
+    var s, guard=0;
     do{
       s=await (await fetch('/admin?api=bsend&id='+c.id)).json();
       if(s.error) throw new Error(s.error);
-      var done=(s.sent+s.failed+s.gone);
+      var done=s.sent+s.failed+s.gone;
       el('nBar').style.width=Math.min(100,Math.round(done/Math.max(1,s.target)*100))+'%';
-      el('nStat').textContent='Delivered '+s.sent+' \u00b7 failed '+s.failed+' \u00b7 expired '+s.gone+' \u00b7 of '+s.target;
+      el('nStat').textContent='✓ '+s.sent+' · ✕ '+(s.failed+s.gone)+' · '+done+'/'+s.target;
     }while(!s.done && ++guard<2000);
     el('nBar').style.width='100%';
+    setTimeout(function(){ location.href='/admin?tab=users'; },1500);
   }catch(e){ el('nStat').textContent='Stopped: '+(e&&e.message||e); }
-  finally{ btn.disabled=false; btn.textContent=U.send; }
+  finally{ btn.disabled=false; reach(); }
 }
 
 /* ---------- admin app extras ---------- */
@@ -1529,6 +1865,95 @@ function appPanel(){
   el('lockRow').onclick=function(){APP.setLock(!APP.lockEnabled());appPanel()};
   var b=el('btnNotif'); if(b){ b.textContent=free?T.now:(bn?'ব্যাকগ্রাউন্ডে চলতে দিন':'Allow background running'); b.onclick=free?function(){APP.checkNow();setTimeout(appPanel,4000)}:function(){APP.batterySettings()}; }
   var tp=document.querySelector('button[onclick="testPush()"]'); if(tp) tp.style.display='none';
+}
+
+/* ---------- visitors ---------- */
+var vDays=7, vTimer=null;
+function vbars(id,rows,map,total){
+  var box=el(id); if(!box) return;
+  var VV=window.__V||{T:{}};
+  if(!rows||!rows.length){ box.innerHTML='<p class="dim">'+(VV.T.none||'—')+'</p>'; return; }
+  var max=total||Math.max.apply(null,rows.map(function(r){return r.n}));
+  box.innerHTML=rows.map(function(r){
+    var name=map&&map[r.k]!=null?map[r.k]:(r.k===''?'—':r.k);
+    var pct=Math.max(3,Math.round(r.n/Math.max(1,max)*100));
+    return '<div class="bar2"><i style="width:'+pct+'%"></i><span>'+esc(name)+'</span><b>'+r.n+'</b></div>';
+  }).join('');
+}
+function vChart(id,series){
+  var box=el(id); if(!box) return;
+  var max=Math.max(1,Math.max.apply(null,series.map(function(x){return Math.max(x.visits,x.downloads)})));
+  box.innerHTML=series.map(function(x){
+    return '<div class="c" title="'+x.day+': '+x.visits+' / '+x.downloads+'"><span class="v" style="height:'+Math.round(x.visits/max*100)+'%"></span><span class="d" style="height:'+Math.round(x.downloads/max*100)+'%"></span></div>';
+  }).join('');
+}
+function vHours(id,hours){
+  var box=el(id); if(!box) return;
+  var max=Math.max(1,Math.max.apply(null,hours));
+  box.innerHTML=hours.map(function(n,h){return '<div class="c" title="'+h+':00 — '+n+'"><span style="height:'+Math.round(n/max*100)+'%"></span></div>'}).join('');
+}
+function vLive(L){
+  var VV=window.__V||{T:{}};
+  if(el('vLive')) el('vLive').textContent=L.now;
+  if(el('vApp')) el('vApp').textContent=L.app?('\u00b7 '+L.app+' '+VV.T.inapp):'';
+  if(el('vAge')) el('vAge').textContent=new Date().toLocaleTimeString();
+  vbars('vLC',L.countries);
+  vbars('vLP',L.pages);
+}
+function loadVisitors(){
+  if(!el('vCards')) return;
+  fetch('/admin?api=visitors&days='+vDays,{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){
+    var VV=window.__V||{T:{},src:{},dev:{}}, T=VV.T;
+    el('vCards').innerHTML=
+      stat2(T.visits,d.visits)+stat2(T.pageviews,d.pageviews)+stat2(T.downloads,d.downloads)+stat2(T.conv,d.conversion+'%')+stat2(T.installs,d.installs);
+    vChart('vDaily',d.series.slice(-Math.max(vDays,7)));
+    vHours('vHours',d.hours);
+    vbars('vSrc',d.sources,VV.src);
+    vbars('vCtry',d.countries);
+    vbars('vPages',d.pages);
+    vbars('vDev',d.devices,VV.dev);
+    vbars('vSplit',[{k:'app',n:d.app.app},{k:'web',n:d.app.web}].filter(function(x){return x.n}),{app:T.app,web:T.web});
+    vLive(d.live);
+  }).catch(function(){});
+}
+function stat2(l,v){return '<div class="card"><span>'+l+'</span><b>'+v+'</b></div>'}
+function liveLoop(){
+  if(!el('vLive')) return;
+  if(vTimer) clearTimeout(vTimer);
+  vTimer=setTimeout(function(){
+    if(!document.hidden) fetch('/admin?api=live',{cache:'no-store'}).then(function(r){return r.json()}).then(vLive).catch(function(){});
+    liveLoop();
+  },15000);
+}
+(function(){
+  var seg=el('vSeg'); if(!seg) return;
+  seg.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    [].forEach.call(seg.querySelectorAll('button'),function(x){x.classList.toggle('on',x===b)});
+    vDays=+b.getAttribute('data-d'); loadVisitors();
+  });
+  loadVisitors(); liveLoop();
+})();
+
+/* ---------- reset ---------- */
+(function(){
+  var i=el('rConfirm'), b=el('rBtn'); if(!i||!b) return;
+  i.addEventListener('input',function(){ b.disabled = i.value !== 'Confirmed'; });
+})();
+async function doReset(){
+  var scope=(document.querySelector('input[name=rscope]:checked')||{}).value||'stats';
+  var v=el('rConfirm').value;
+  if(v!=='Confirmed') return;
+  var msg = scope==='all' ? 'This erases the WHOLE panel. Continue?' : 'Erase all statistics now?';
+  if(!confirm(msg)) return;
+  el('rBtn').disabled=true; el('rOut').textContent='...';
+  try{
+    var r=await fetch('/admin?api=reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({scope:scope,confirm:v})});
+    var d=await r.json();
+    if(d.error){ el('rOut').textContent=d.error; el('rBtn').disabled=false; return; }
+    el('rOut').textContent='\u2713 Done. Reloading...';
+    setTimeout(function(){ location.href='/admin?tab=monitor'; },900);
+  }catch(e){ el('rOut').textContent='Failed.'; el('rBtn').disabled=false; }
 }
 
 /* ---------- boot ---------- */

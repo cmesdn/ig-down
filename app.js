@@ -139,55 +139,49 @@ self.addEventListener('notificationclick', function(e){
  * Runs before first paint. Only flags the document when running as an
  * installed app; in a normal browser it does nothing at all.
  */
-export const APP_HEAD = `<script>(function(){try{var s=window.matchMedia&&matchMedia('(display-mode: standalone)').matches||navigator.standalone;if(!s)return;var d=document.documentElement;d.classList.add('app');var k='igto_launch';var n=+(localStorage.getItem(k)||0);d.classList.add(n?'again':'first');localStorage.setItem(k,String(n+1))}catch(e){}})()</script>`;
+export const APP_HEAD = `<script>(function(){try{var s=window.matchMedia&&matchMedia('(display-mode: standalone)').matches||navigator.standalone;if(!s)return;var d=document.documentElement;d.classList.add('app');if(sessionStorage.getItem('igto_run'))return;sessionStorage.setItem('igto_run','1');var k='igto_launch';var n=+(localStorage.getItem(k)||0);d.classList.add('splash-on',n?'again':'first');localStorage.setItem(k,String(n+1))}catch(e){}})()</script>`;
 
 /* ===================== splash markup ===================== */
 
 export const SPLASH = `<div class="splash" aria-hidden="true">
-  <div class="sp-in">
-    <div class="sp-mark">
-      <svg viewBox="0 0 32 32" fill="none"><defs><linearGradient id="spg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8a3d"/><stop offset=".5" stop-color="#f9377d"/><stop offset="1" stop-color="#8a3ffc"/></linearGradient></defs>
-        <rect width="32" height="32" rx="9" fill="url(#spg)"/>
-        <g class="sp-arrow"><path d="M16 8v10m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></g>
-        <path class="sp-base" d="M9.5 23.5h13" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
-      </svg>
-      <span class="sp-sheen"></span>
-    </div>
-    <div class="sp-word"><b>IGto</b>Download</div>
+  <div class="sp-mark">
+    <svg viewBox="0 0 32 32" fill="none"><defs><linearGradient id="spg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8a3d"/><stop offset=".5" stop-color="#f9377d"/><stop offset="1" stop-color="#8a3ffc"/></linearGradient></defs>
+      <rect width="32" height="32" fill="url(#spg)"/>
+      <g class="sp-arrow"><path d="M16 8v10m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <path class="sp-base" d="M9.5 23.5h13" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    <span class="sp-sheen"></span>
   </div>
+  <div class="sp-word"><b>IGto</b>Download</div>
 </div>`;
 
 /* ===================== styles ===================== */
 
 export const APP_CSS = `
-/* ---- launch animation: installed app only ---- */
+/* ---- launch animation: installed app, cold start only ----
+   Android shows its own splash (icon on the background colour) before the
+   page exists. This one starts from that exact frame — same background,
+   icon at the same centre — and carries on, so the two read as one. */
 .splash{display:none}
-html.app .splash{display:grid;position:fixed;inset:0;z-index:9999;place-items:center;background:var(--bg);
-  animation:spOut .38s cubic-bezier(.22,1,.36,1) forwards;animation-delay:.42s;pointer-events:none}
-html.app.first .splash{animation-delay:1.15s}
-@keyframes spOut{to{opacity:0;visibility:hidden;transform:scale(1.04)}}
-.sp-in{display:flex;flex-direction:column;align-items:center;gap:16px}
-.sp-mark{width:76px;height:76px;position:relative;border-radius:22px;overflow:hidden;
-  box-shadow:0 14px 40px rgba(249,55,125,.35);animation:spPop .5s cubic-bezier(.22,1,.36,1) both}
+html.splash-on .splash{display:block;position:fixed;inset:0;z-index:9999;background:var(--bg);pointer-events:none;
+  animation:spOut .34s cubic-bezier(.22,1,.36,1) forwards;animation-delay:.5s}
+html.splash-on.first .splash{animation-delay:1.15s}
+@keyframes spOut{to{opacity:0;visibility:hidden}}
+.sp-mark{position:absolute;left:50%;top:50%;width:112px;height:112px;margin:-56px 0 0 -56px;border-radius:34%;overflow:hidden;
+  box-shadow:0 16px 46px rgba(249,55,125,.32)}
 .sp-mark svg{width:100%;height:100%;display:block}
-@keyframes spPop{from{transform:scale(.72);opacity:0}to{transform:scale(1);opacity:1}}
-.sp-arrow{animation:spDrop .55s cubic-bezier(.22,1,.36,1) .12s both}
-@keyframes spDrop{from{transform:translateY(-7px);opacity:0}to{transform:none;opacity:1}}
-.sp-base{stroke-dasharray:14;stroke-dashoffset:14;animation:spLine .4s ease .4s forwards}
-@keyframes spLine{to{stroke-dashoffset:0}}
+.sp-arrow{animation:spDrop .5s cubic-bezier(.22,1,.36,1) .05s both}
+@keyframes spDrop{0%{transform:translateY(-3px)}45%{transform:translateY(2px)}100%{transform:none}}
 .sp-sheen{position:absolute;top:0;left:-70%;width:45%;height:100%;
-  background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-18deg);
-  animation:spSheen .7s ease .55s forwards}
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);transform:skewX(-18deg);
+  animation:spSheen .6s ease .12s forwards}
 @keyframes spSheen{to{left:130%}}
-.sp-word{font-weight:700;font-size:19px;letter-spacing:-.5px;color:var(--fg);opacity:0;animation:spWord .45s ease .5s forwards}
+.sp-word{position:absolute;left:0;right:0;top:50%;margin-top:78px;text-align:center;font-weight:700;font-size:19px;letter-spacing:-.5px;
+  color:var(--fg);opacity:0;animation:spWord .45s ease .35s forwards}
 .sp-word b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
-@keyframes spWord{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-/* repeat launches: a quick pulse, nothing more */
-html.app.again .sp-word{display:none}
-html.app.again .sp-arrow,html.app.again .sp-base,html.app.again .sp-sheen{animation:none;stroke-dashoffset:0}
-html.app.again .sp-mark{animation:spPulse .42s ease both}
-@keyframes spPulse{0%{transform:scale(.86);opacity:.4}60%{transform:scale(1.03);opacity:1}100%{transform:scale(1)}}
-@media(prefers-reduced-motion:reduce){html.app .splash{display:none}}
+@keyframes spWord{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+html.splash-on.again .sp-word{display:none}
+@media(prefers-reduced-motion:reduce){html.splash-on .splash{display:none}}
 
 /* ---- install / open-in-chrome banner: fixed, never shifts layout ---- */
 .appbar{position:fixed;left:12px;right:12px;bottom:12px;z-index:80;max-width:520px;margin:0 auto;
@@ -261,6 +255,24 @@ function ev(k, extra){
   } catch (e) {}
   if (window.gtag) gtag('event', k);
 }
+
+/* ---------- visits and live presence ----------
+   One anonymous id per browser session (sessionStorage, gone when the tab
+   closes). One beacon on load, then a light heartbeat every two minutes
+   while the page is visible, for at most half an hour. */
+var SID = (function(){ try { var s = sessionStorage.getItem('igto_sid'); if (!s) { s = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24); sessionStorage.setItem('igto_sid', s); } return s; } catch (e) { return ''; } })();
+function presence(t){
+  if (!SID) return;
+  try {
+    var body = JSON.stringify({ t: t, s: SID, p: location.pathname, r: t === 'view' ? document.referrer : '', a: standalone ? 1 : 0 });
+    if (navigator.sendBeacon) navigator.sendBeacon('/api/p', new Blob([body], { type: 'application/json' }));
+    else fetch('/api/p', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body, keepalive: true });
+  } catch (e) {}
+}
+presence('view');
+var beats = 0;
+setInterval(function(){ if (!document.hidden && beats < 15) { beats++; presence('beat'); } }, 120000);
+document.addEventListener('visibilitychange', function(){ if (!document.hidden) { beats = 0; presence('beat'); } });
 
 /* ---------- service worker ---------- */
 if ('serviceWorker' in navigator && !inApp) {
