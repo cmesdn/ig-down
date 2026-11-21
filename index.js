@@ -25,6 +25,16 @@ export default {
     const origin = url.origin;
     const path = url.pathname;
 
+    // One home for the site: www and the old workers.dev address send visitors (and Google)
+    // to igtodownload.com. The admin, APIs, downloads and service workers keep answering
+    // on the old address so installed apps and the admin app keep working.
+    const CANON = "igtodownload.com";
+    if (url.hostname === "www." + CANON)
+      return Response.redirect("https://" + CANON + path + url.search, 301);
+    if (url.hostname.endsWith(".workers.dev") && (request.method === "GET" || request.method === "HEAD")
+        && !/^\/(admin|api\/|sw\.js|app-sw\.js|dl|stream|img|n\/|health|manifest\.webmanifest)/.test(path))
+      return Response.redirect("https://" + CANON + path + url.search, 301);
+
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
     try {
