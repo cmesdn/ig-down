@@ -120,6 +120,9 @@ export default {
       // --- machine files
       if (path === "/sitemap.xml")
         return new Response(await sitemap(origin, env), { headers: { "content-type": "application/xml", "cache-control": "public, max-age=3600" } });
+      // Google Search Console ownership file (only this exact token — never a pattern)
+      if (path === "/google844f16a261948d1a.html")
+        return new Response("google-site-verification: google844f16a261948d1a.html", { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" } });
       if (path === "/robots.txt")
         return new Response(robots(origin), { headers: { "content-type": "text/plain", "cache-control": "public, max-age=3600" } });
 
