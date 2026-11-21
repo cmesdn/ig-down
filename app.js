@@ -201,7 +201,6 @@ body.has-sticky .appbar{bottom:86px}
 /* ---- history sheet ---- */
 .histbtn{background:var(--card);border:1px solid var(--line);color:var(--mut);width:36px;height:36px;border-radius:11px;cursor:pointer;flex:none;display:grid;place-items:center;transition:transform .2s cubic-bezier(.22,1,.36,1)}
 .histbtn:active{transform:scale(.92)}
-@media(max-width:620px){.histbtn{margin-left:auto}.bellbtn+.histbtn{margin-left:0}}
 .bellbtn{display:none}
 html.app .bellbtn{display:grid}
 .bellbtn.on{color:var(--acc,#e1306c)}

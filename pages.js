@@ -300,9 +300,11 @@ ${adSlot(cfg, "sticky_top")}
   <nav class="links">
     <a href="/reels">Reels</a><a href="/video">Video</a><a href="/photo">Photo</a><a href="/story">Story</a><a href="/blog">Blog</a>
   </nav>
+  <div class="nact">
   <button class="histbtn bellbtn" id="bellbtn" aria-label="Notifications" title="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button>
   <button class="histbtn" id="histbtn" aria-label="Recent downloads" title="Recent downloads">${I.hist}</button>
-  <button class="themebtn" id="themebtn" aria-label="Toggle theme">${I.moon}</button>
+  <button class="themebtn" id="themebtn" aria-label="Toggle light or dark mode" title="Light / dark"><span class="ti ti-moon">${I.moon}</span><span class="ti ti-sun">${I.sun}</span></button>
+  </div>
 </header>
 ${adSlot(cfg, "header")}
 <main>${body}</main>
@@ -354,17 +356,6 @@ ${adSlot(cfg, "above_result", "", "slot-above-result")}
   </div>
 </section>
 ${adSlot(cfg, "in_content")}
-<section class="feats">
-  <h2>Why use ${esc(cfg.brand.name)}</h2>
-  <div class="fgrid">
-    <div class="feat"><h3>Original quality</h3><p>The file is taken straight from Instagram and passed through untouched — no re-encoding, no quality loss.</p></div>
-    <div class="feat"><h3>No watermark</h3><p>Nothing is stamped onto your video. What you save looks exactly like what you watched.</p></div>
-    <div class="feat"><h3>No login, ever</h3><p>You are never asked for an Instagram password. Only the public link is needed.</p></div>
-    <div class="feat"><h3>Works everywhere</h3><p>Android, iPhone, Windows, Mac, tablets. Any browser, nothing to install.</p></div>
-    <div class="feat"><h3>Fast everywhere</h3><p>Runs on a global edge network, so requests are handled close to where you are.</p></div>
-    <div class="feat"><h3>Nothing stored</h3><p>Files stream through to your device. We never keep a copy of what you download.</p></div>
-  </div>
-</section>
 <section class="appsec" id="appsec">
   <img src="/og.jpg" width="1200" height="630" loading="lazy" decoding="async" alt="IGtoDownload app on a phone">
   <div class="aps-tx">
@@ -376,6 +367,17 @@ ${adSlot(cfg, "in_content")}
     </ul>
     <button type="button" class="aps-go" id="appGet"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>Install the app</span></button>
     <p class="aps-help" id="appHelp" hidden></p>
+  </div>
+</section>
+<section class="feats">
+  <h2>Why use ${esc(cfg.brand.name)}</h2>
+  <div class="fgrid">
+    <div class="feat"><h3>Original quality</h3><p>The file is taken straight from Instagram and passed through untouched — no re-encoding, no quality loss.</p></div>
+    <div class="feat"><h3>No watermark</h3><p>Nothing is stamped onto your video. What you save looks exactly like what you watched.</p></div>
+    <div class="feat"><h3>No login, ever</h3><p>You are never asked for an Instagram password. Only the public link is needed.</p></div>
+    <div class="feat"><h3>Works everywhere</h3><p>Android, iPhone, Windows, Mac, tablets. Any browser, nothing to install.</p></div>
+    <div class="feat"><h3>Fast everywhere</h3><p>Runs on a global edge network, so requests are handled close to where you are.</p></div>
+    <div class="feat"><h3>Nothing stored</h3><p>Files stream through to your device. We never keep a copy of what you download.</p></div>
   </div>
 </section>
 <section class="faq">
@@ -527,6 +529,7 @@ const sv = (b, extra = "") =>
 const I = {
   mark:
     '<svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><defs><linearGradient id="bm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8a3d"/><stop offset=".5" stop-color="#f9377d"/><stop offset="1" stop-color="#8a3ffc"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#bm)"/><path d="M16 8v10m0 0l-4-4m4 4l4-4M9.5 23.5h13" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  sun: sv('<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/>'),
   moon: sv('<path d="M20 14.5A8.2 8.2 0 1 1 9.5 4a6.6 6.6 0 0 0 10.5 10.5Z"/>'),
   paste: sv('<rect x="8" y="3.5" width="8" height="4" rx="1.4"/><path d="M16 5.5h2a2 2 0 0 1 2 2V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h2"/>'),
   play: '<svg viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8.4 5.2a1 1 0 0 1 1.52-.86l9 6.8a1 1 0 0 1 0 1.72l-9 6.8A1 1 0 0 1 8.4 18.8z"/></svg>',
@@ -568,6 +571,20 @@ a{color:inherit}
 .themebtn{background:var(--card);border:1px solid var(--line);color:var(--mut);width:36px;height:36px;border-radius:11px;cursor:pointer;flex:none;display:grid;place-items:center;transition:border-color .2s,transform .2s var(--ease)}
 .themebtn:active{transform:scale(.92)}
 .themebtn svg{width:17px;height:17px}
+.nact{display:flex;align-items:center;gap:8px;margin-left:14px;flex:none}
+@media(max-width:620px){.nact{margin-left:auto}}
+.themebtn{position:relative;overflow:hidden}
+.themebtn .ti{position:absolute;inset:0;display:grid;place-items:center;transition:transform .55s cubic-bezier(.34,1.56,.64,1),opacity .35s ease}
+[data-theme=dark] .ti-sun,[data-theme=light] .ti-moon{opacity:0;transform:rotate(-120deg) scale(.3)}
+[data-theme=dark] .ti-moon,[data-theme=light] .ti-sun{opacity:1;transform:none}
+.ti-sun{color:#f5a524}
+.themebtn.tb-pop{animation:tbpop .55s cubic-bezier(.34,1.56,.64,1)}
+@keyframes tbpop{0%{transform:scale(1)}35%{transform:scale(.82)}100%{transform:scale(1)}}
+html.theme-fade,html.theme-fade *,html.theme-fade *::before{transition:background-color .45s ease,color .45s ease,border-color .45s ease,box-shadow .45s ease!important}
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-new(root){animation:igReveal .6s cubic-bezier(.65,0,.35,1)}
+@keyframes igReveal{from{clip-path:circle(0 at var(--tx,100%) var(--ty,0))}to{clip-path:circle(var(--tr,150vmax) at var(--tx,100%) var(--ty,0))}}
+@media (prefers-reduced-motion:reduce){::view-transition-new(root){animation:none}.themebtn .ti{transition:none}}
 @media(max-width:620px){.links{display:none}}
 /* hero */
 .hero{text-align:center;padding:34px 0 8px}
@@ -699,8 +716,23 @@ var ICON={
  photo: '${I.photo}'
 };
 var T=localStorage.getItem('th');if(T)document.documentElement.dataset.theme=T;
+function paintBar(t){document.querySelectorAll('meta[name=theme-color]').forEach(function(m){m.setAttribute('content',t==='light'?'#fbfbfd':'#0a0a0f')})}
+paintBar(document.documentElement.dataset.theme);
 var tb=document.getElementById('themebtn');
-if(tb)tb.onclick=function(){var d=document.documentElement,n=d.dataset.theme==='dark'?'light':'dark';d.dataset.theme=n;try{localStorage.setItem('th',n)}catch(e){}};
+if(tb)tb.onclick=function(){
+  var d=document.documentElement,n=d.dataset.theme==='dark'?'light':'dark';
+  function apply(){d.dataset.theme=n;paintBar(n);try{localStorage.setItem('th',n)}catch(e){}}
+  tb.classList.remove('tb-pop');void tb.offsetWidth;tb.classList.add('tb-pop');
+  var r=tb.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+  var reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(document.startViewTransition&&!reduce){
+    d.style.setProperty('--tx',x+'px');d.style.setProperty('--ty',y+'px');
+    d.style.setProperty('--tr',Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y))+'px');
+    document.startViewTransition(apply);
+  }else{
+    d.classList.add('theme-fade');apply();setTimeout(function(){d.classList.remove('theme-fade')},500);
+  }
+};
 
 var f=document.getElementById('f');if(!f)return;
 var u=document.getElementById('u'),go=document.getElementById('go'),out=document.getElementById('out');
