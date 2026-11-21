@@ -7,7 +7,10 @@ import { getConfig, prune } from "./store.js";
 import { resolveMedia, handleDownload, handleStream, handleImage, healthCheck, shortcode } from "./resolve.js";
 import { handleAdmin } from "./admin.js";
 import { route, render, sitemap, robots, esc } from "./pages.js";
-import { ogImage, appIcon } from "./assets.js";
+import { ogImage, appIcon, icon192, icon512, iconMaskable } from "./assets.js";
+import { manifest, SW } from "./pwa.js";
+import { siteStatus } from "./monitor.js";
+import { pushIfChanged } from "./push.js";
 
 const HITS = new Map(); // in-isolate rate limit: ip -> {n, reset}
 
@@ -20,6 +23,23 @@ export default {
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
     try {
+      // --- app shell for the admin PWA (must come before the admin handler)
+      if (path === "/admin/manifest.webmanifest") {
+        const cfg = await getConfig(env);
+        return new Response(manifest(cfg.brand.name, origin), {
+          headers: { "content-type": "application/manifest+json", "cache-control": "public, max-age=3600" },
+        });
+      }
+      if (path === "/sw.js") {
+        return new Response(SW, {
+          headers: {
+            "content-type": "application/javascript; charset=utf-8",
+            "service-worker-allowed": "/",
+            "cache-control": "no-cache",
+          },
+        });
+      }
+
       // --- admin
       if (path === "/admin" || path.startsWith("/admin/")) return await handleAdmin(request, url, env, ctx);
 
@@ -32,6 +52,9 @@ export default {
       // --- static assets
       if (path === "/og.jpg" || path === "/og.png") return ogImage();
       if (path === "/apple-touch-icon.png" || path === "/apple-touch-icon-precomposed.png") return appIcon();
+      if (path === "/icon-192.png") return icon192();
+      if (path === "/icon-512.png") return icon512();
+      if (path === "/icon-maskable.png") return iconMaskable();
 
       // --- media proxies
       if (path === "/dl") return await handleDownload(request, url, env);
@@ -97,6 +120,14 @@ export default {
       (async () => {
         await healthCheck(env);
         await prune(env);
+        // decide whether the phone needs to buzz
+        try {
+          const cfg = await getConfig(env);
+          const st = await siteStatus(env);
+          const alerts = cfg.alerts || {};
+          const level = st.level === "warn" && !alerts.notifyWarn ? "ok" : st.level;
+          await pushIfChanged(env, level, "", alerts.repeatMinutes);
+        } catch (_) {}
       })()
     );
   },

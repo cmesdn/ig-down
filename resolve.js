@@ -10,7 +10,7 @@
  * URL-template proxy, set in /admin. Leave it empty and nothing changes.
  */
 
-import { getConfig, getCookies, saveCookies, pickOrder, logEvent, notify } from "./store.js";
+import { getConfig, getCookies, saveCookies, pickOrder, logEvent, notify, rememberGoodCode, probeCode } from "./store.js";
 
 export const WEB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -19,7 +19,14 @@ const APP_UA =
 const APP_ID = "936619743392459";
 const DOC_ID = "10015901848480474";
 const LINK_TTL = 7200;
-const PROBE = "https://www.instagram.com/reel/C5Qf0xAr9Jx/";
+
+/**
+ * Only these count against a cookie. A 400/404/"no items" means the POST is
+ * gone or private — blaming the cookie for that is what used to kill the pool.
+ */
+function isAuthError(msg) {
+  return /\b(401|403|429)\b|login wall|checkpoint|challenge|not authorized|please wait/i.test(String(msg || ""));
+}
 
 /* ========================= public API ========================= */
 
@@ -51,6 +58,7 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
   const cookies = await getCookies(env);
   const order = pickOrder(cookies);
   const attempts = [];
+  const errKind = new Map(); // cookie id -> "auth" | "other"
   let result = null, usedCookie = null;
 
   // layer 1 + 2: every live cookie, then anonymous
@@ -67,10 +75,16 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
           break outer;
         }
         attempts.push({ cookie: ck.id, method: fn.name, ok: false, error: "empty" });
+        if (!errKind.has(ck.id)) errKind.set(ck.id, "other");
       } catch (e) {
         const msg = (e && e.message) || String(e);
         attempts.push({ cookie: ck.id, method: fn.name, ok: false, error: msg });
-        if (/401|403|login wall|checkpoint|challenge/i.test(msg) && fn === METHODS[0]) break;
+        if (isAuthError(msg)) {
+          errKind.set(ck.id, "auth");
+          if (fn === METHODS[0]) break; // this cookie is rejected, move on
+        } else if (!errKind.has(ck.id)) {
+          errKind.set(ck.id, "other");
+        }
       }
     }
   }
@@ -91,8 +105,9 @@ export async function resolveMedia(code, env, ctx, opts = {}) {
   const ms = Date.now() - t0;
 
   if (ctx) {
-    const real = candidates.filter((c) => c.id !== "__anon");
-    ctx.waitUntil(markCookies(env, cookies, usedCookie && usedCookie.id !== "__anon" ? usedCookie : null, real, !!result && usedCookie && usedCookie.id !== "__anon"));
+    const byCookie = usedCookie && usedCookie.id !== "__anon" ? usedCookie : null;
+    ctx.waitUntil(markCookies(env, cookies, byCookie, errKind));
+    if (result) ctx.waitUntil(rememberGoodCode(env, code));
     ctx.waitUntil(
       logEvent(env, {
         kind: "resolve",
@@ -331,74 +346,123 @@ const METHODS = [viaMobileApi, viaGraphQL, viaEmbed, viaOgTag];
 
 /* ===================== cookie health ===================== */
 
-async function markCookies(env, all, used, tried, success) {
+async function markCookies(env, all, used, errKind) {
   let changed = false;
   const byId = new Map(all.map((c) => [c.id, c]));
+  const now = Date.now();
 
-  if (success && used && byId.has(used.id)) {
+  if (used && byId.has(used.id)) {
     const c = byId.get(used.id);
-    c.fails = 0; c.uses = (c.uses || 0) + 1; c.lastOk = Date.now(); c.status = "ok";
+    c.fails = 0; c.uses = (c.uses || 0) + 1; c.lastOk = now; c.lastError = "";
+    if (c.status !== "ok") c.status = "ok";
     changed = true;
-    for (const t of tried) {
-      if (t.id === used.id) break;
-      const f = byId.get(t.id);
-      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
-    }
-  } else {
-    for (const t of tried) {
-      const f = byId.get(t.id);
-      if (f) { f.fails = (f.fails || 0) + 1; changed = true; }
-    }
   }
+
+  // Only auth rejections count. A private or deleted post is not the cookie's fault.
+  for (const [id, kind] of errKind) {
+    if (kind !== "auth") continue;
+    const c = byId.get(id);
+    if (!c || (used && c.id === used.id)) continue;
+    c.fails = (c.fails || 0) + 1;
+    // a cookie that worked in the last half hour gets the benefit of the doubt
+    if (c.lastOk && now - c.lastOk < 1800_000) c.fails = Math.min(c.fails, 2);
+    changed = true;
+  }
+
   if (!changed) return;
 
   const died = [];
   for (const c of all) {
-    if (c.fails >= 3 && c.status !== "dead") { c.status = "dead"; died.push(c.label || c.id); }
-    else if (c.fails > 0 && c.fails < 3 && c.status === "ok") c.status = "warn";
+    if (c.fails >= 5 && c.status !== "dead") { c.status = "dead"; died.push(c.label || c.id); }
+    else if (c.fails > 0 && c.fails < 5 && c.status === "ok") c.status = "warn";
   }
   await saveCookies(env, all);
-  if (died.length) await notify(env, "⚠️ IGtoDownload: cookie dead — " + died.join(", "));
+  if (died.length) await notify(env, "\u26a0\ufe0f IGtoDownload: cookie dead \u2014 " + died.join(", "));
   if (all.length && all.every((c) => c.status === "dead"))
-    await notify(env, "🚨 IGtoDownload: ALL cookies are dead. Running on fallbacks only. Add a fresh sessionid in /admin.");
+    await notify(env, "\ud83d\udea8 IGtoDownload: ALL cookies are dead. Running on fallbacks only. Add a fresh sessionid in /admin.");
 }
 
 export async function healthCheck(env) {
   const cfg = await getConfig(env);
   const net = netFrom(cfg);
   const list = await getCookies(env);
-  if (!list.length) return { checked: 0, live: 0, revived: 0 };
-  const code = shortcode(PROBE);
-  let revived = 0;
+  if (!list.length) return { checked: 0, live: 0, revived: 0, note: "no cookies yet" };
+
+  const code = await probeCode(env, cfg);
+  if (!code) {
+    // Nothing safe to test against — do nothing rather than guess and kill the pool.
+    return {
+      checked: 0,
+      live: list.filter((c) => c.status !== "dead").length,
+      revived: 0,
+      note: "No test post known yet. Download one reel on the site, or set a test link in Settings.",
+    };
+  }
+
+  let revived = 0, passed = 0, authFails = 0, otherFails = 0;
+  const pending = [];
+
   for (const c of list) {
     try {
       const r = await viaMobileApi(code, c.value, net);
       if (r && r.items.length) {
         if (c.status === "dead") revived++;
         c.status = "ok"; c.fails = 0; c.lastOk = Date.now(); c.lastError = "";
+        passed++;
+      } else {
+        otherFails++;
+        pending.push([c, "empty response"]);
       }
     } catch (e) {
-      c.fails = (c.fails || 0) + 1;
-      c.lastError = ((e && e.message) || "").slice(0, 80);
-      if (c.fails >= 3) c.status = "dead";
-      else if (c.status === "ok") c.status = "warn";
+      const msg = ((e && e.message) || "").slice(0, 80);
+      if (isAuthError(msg)) { authFails++; pending.push([c, msg, true]); }
+      else { otherFails++; pending.push([c, msg]); }
     }
   }
+
+  // Every cookie failing with the same non-auth error means the test post is
+  // gone, not that the cookies are bad. Leave statuses untouched.
+  const probeBad = passed === 0 && authFails === 0 && otherFails === list.length;
+  if (probeBad) {
+    try { await env.CONFIG.delete("lastgood"); } catch (_) {}
+    for (const [c, msg] of pending) c.lastError = "test post unavailable (" + msg + ")";
+    await saveCookies(env, list);
+    return {
+      checked: list.length,
+      live: list.filter((c) => c.status !== "dead").length,
+      revived: 0,
+      note: "The test post is no longer available, so nothing was marked dead. Download any reel on the site and a new test post is picked automatically.",
+    };
+  }
+
+  for (const [c, msg, isAuth] of pending) {
+    c.lastError = msg;
+    if (!isAuth) continue;
+    c.fails = (c.fails || 0) + 1;
+    if (c.fails >= 5) c.status = "dead";
+    else if (c.status === "ok") c.status = "warn";
+  }
+
   await saveCookies(env, list);
   const live = list.filter((c) => c.status !== "dead").length;
-  if (!live) await notify(env, "🚨 IGtoDownload: health check found 0 working cookies.");
+  if (!live) await notify(env, "\ud83d\udea8 IGtoDownload: health check found 0 working cookies.");
   return { checked: list.length, live, revived };
 }
 
 export async function testCookie(value, env) {
-  const net = env ? netFrom(await getConfig(env)) : null;
-  const code = shortcode(PROBE);
+  const cfg = env ? await getConfig(env) : null;
+  const net = cfg ? netFrom(cfg) : null;
+  const code = env ? await probeCode(env, cfg) : null;
+  if (!code)
+    return { ok: null, ms: 0, error: "No test post known yet — saved without testing. Download one reel on the site first." };
   const t0 = Date.now();
   try {
     const r = await viaMobileApi(code, value, net);
     return { ok: !!(r && r.items.length), ms: Date.now() - t0 };
   } catch (e) {
-    return { ok: false, ms: Date.now() - t0, error: (e && e.message) || String(e) };
+    const msg = (e && e.message) || String(e);
+    if (!isAuthError(msg)) return { ok: null, ms: Date.now() - t0, error: "Test post unavailable (" + msg + ") — cookie not judged." };
+    return { ok: false, ms: Date.now() - t0, error: msg };
   }
 }
 

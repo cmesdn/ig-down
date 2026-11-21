@@ -4,7 +4,9 @@
  */
 
 import { getConfig, saveConfig, getCookies, saveCookies, getStats, AD_SLOTS, normalizeCookie, flushCookieCache } from "./store.js";
-import { diagnose, testCookie, healthCheck, shortcode } from "./resolve.js";
+import { testCookie, healthCheck } from "./resolve.js";
+import { siteStatus, statusLine, fullDiagnose, quickCheck } from "./monitor.js";
+import { getVapid, addSub, removeSub, clearSubs, pushAll, getSubs } from "./push.js";
 import { esc } from "./pages.js";
 
 const SESSION_HOURS = 24;
@@ -17,7 +19,7 @@ const L = {
     admin: "এডমিন", signout: "সাইন আউট", signin: "সাইন ইন", password: "পাসওয়ার্ড",
     wrongpw: "ভুল পাসওয়ার্ড।", toomany: "অনেকবার ভুল হয়েছে। কয়েক মিনিট পর আবার চেষ্টা করুন।",
     guide: "📖 গাইড দেখুন", save: "সেভ করুন",
-    tabs: { home: "ড্যাশবোর্ড", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
+    tabs: { monitor: "লাইভ", home: "ড্যাশবোর্ড", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
 
     a_nocookie: "এখনো কোনো সেশন কুকি নেই। কুকি ট্যাবে গিয়ে একটা যোগ করুন, নইলে কোনো ডাউনলোড হবে না।",
     a_alldead: "সব কুকি মৃত। সাইট এখন কিছুই ডাউনলোড করতে পারছে না। কুকি ট্যাবে নতুন sessionid যোগ করুন।",
@@ -71,6 +73,25 @@ const L = {
     d_intro: "প্রতিটা কুকি দিয়ে প্রতিটা মেথড চালিয়ে দেখায় কোনটা কী বলছে। কিছু ভেঙে গেলে সবার আগে এখানে দেখুন।",
     d_what: "যা দেখবেন", d_means: "মানে", d_fix: "করণীয়",
 
+    mo_live: "লাইভ অবস্থা", mo_checking: "দেখা হচ্ছে...", mo_updated: "শেষ দেখা হয়েছে",
+    mo_secago: "সেকেন্ড আগে", mo_refresh: "এখনই দেখুন", mo_auto: "স্বয়ংক্রিয়",
+    mo_cookies: "কুকি", mo_today: "আজ", mo_rate: "সফলতা", mo_layers: "সুরক্ষা স্তর",
+    mo_l1: "কুকি পুল", mo_l2: "Anonymous", mo_l3: "বাইরের API", mo_proxy: "প্রক্সি",
+    mo_on: "চালু", mo_off: "বন্ধ",
+    mo_quick: "লিংক পরীক্ষা করুন", mo_quickhint: "একটা রিলের লিংক দিন — এখনই কাজ করছে কিনা বলে দেব, সহজ ভাষায়।",
+    mo_check: "পরীক্ষা করুন", mo_full: "বিস্তারিত দেখুন",
+    mo_alerts: "সতর্কতা ও ভাইব্রেশন", mo_vib: "ভাইব্রেশন চালু",
+    mo_vsec: "ভাইব্রেশনের দৈর্ঘ্য (সেকেন্ড)", mo_vrep: "কতবার কাঁপবে", mo_vgap: "দুই কাঁপুনির মাঝে বিরতি (মিলিসেকেন্ড)",
+    mo_poll: "কত সেকেন্ড পরপর দেখবে", mo_warn: "সতর্কতাতেও জানাবে (শুধু বন্ধ হলে নয়)",
+    mo_repeat: "সমস্যা চললে কত মিনিট পরপর মনে করাবে", mo_alang: "নোটিফিকেশনের ভাষা",
+    mo_testvib: "ভাইব্রেশন পরীক্ষা", mo_savealert: "সতর্কতা সেভ করুন",
+    mo_phone: "ফোনে অ্যাপ ও নোটিফিকেশন", mo_install: "অ্যাপ ইনস্টল করুন",
+    mo_enablen: "নোটিফিকেশন চালু করুন", mo_testpush: "টেস্ট নোটিফিকেশন পাঠান",
+    mo_devices: "যুক্ত ডিভাইস", mo_offn: "নোটিফিকেশন বন্ধ করুন",
+    g_mo_alerts: "দুই রকম সতর্কতা আছে, দুটোই আলাদা কাজ করে।\n\n১. অ্যাপ খোলা থাকলে — এই পাতা নিজে নিজেই নির্দিষ্ট সময় পরপর অবস্থা দেখে। সমস্যা পেলে সাথে সাথে ফোন কাঁপে, ঠিক যত সেকেন্ড আপনি বলেছেন। কোনো শব্দ হবে না, শুধু ভাইব্রেশন।\n\n২. অ্যাপ বন্ধ থাকলে — পুশ নোটিফিকেশন আসে। এর জন্য নিচে \"নোটিফিকেশন চালু করুন\" চাপতে হবে একবার।\n\n⚠️ শব্দ বন্ধ করতে: Android সেটিংস → Apps → Chrome → Notifications → Sites → শব্দ বন্ধ, ভাইব্রেশন চালু। ওয়েব থেকে শব্দ আলাদা করে বন্ধ করা যায় না, কিন্তু ফোনের সেটিংস থেকে যায়।\n\niPhone-এ: ভাইব্রেশন API কাজ করে না, আর পুশ পেতে হলে অবশ্যই অ্যাপটা হোম স্ক্রিনে ইনস্টল করতে হবে।",
+    g_mo_install: "এটা হোম স্ক্রিনে বসালে সাধারণ অ্যাপের মতোই খুলবে — ব্রাউজারের অ্যাড্রেস বার থাকবে না।\n\nAndroid: Chrome মেনু (⋮) → \"Add to Home screen\" বা \"Install app\"। নিচের বাটনেও কাজ হতে পারে।\n\niPhone: Safari → Share বাটন → \"Add to Home Screen\"। iPhone-এ পুশ নোটিফিকেশন পেতে এটা বাধ্যতামূলক।\n\nইনস্টল করার পর অ্যাপ আইকন থেকেই সরাসরি লাইভ পাতায় ঢুকবেন।",
+    set_probe: "হেলথ চেকের টেস্ট লিংক", set_probehint: "(ঐচ্ছিক)",
+    g_probe: "প্রতি ৩০ মিনিটে সাইট একটা পরিচিত রিল দিয়ে সব cookie পরীক্ষা করে।\n\nকোন রিল দিয়ে করবে?\nযে রিলটা সবচেয়ে শেষে সফলভাবে ডাউনলোড হয়েছে, সেটা নিজে নিজেই মনে রাখে। তাই সাধারণত এই ঘরটা খালি রাখলেই চলে।\n\nএখানে নিজের একটা স্থায়ী পাবলিক রিলের লিংক দিলে আরও নিশ্চিত হয় — এমন একটা রিল বেছে নিন যেটা কখনো মুছবেন না (নিজের অ্যাকাউন্টের হলে সবচেয়ে ভালো)।\n\n⚠️ গুরুত্বপূর্ণ: টেস্ট রিলটা মুছে গেলে বা প্রাইভেট হলে হেলথ চেক আর কোনো cookie-কে মৃত চিহ্নিত করবে না — ভুল করে পুরো পুল মেরে ফেলার চেয়ে কিছু না করা ভালো।",
     set_fb: "ফলব্যাক স্তর", set_proxy: "প্রক্সি", set_api: "বাইরের API (শেষ ভরসা)",
     set_ptpl: "প্রক্সি URL টেমপ্লেট", set_phdr: "প্রক্সি হেডার (JSON)",
     set_atpl: "API এন্ডপয়েন্ট টেমপ্লেট", set_ahdr: "API হেডার (JSON)",
@@ -85,7 +106,7 @@ const L = {
     admin: "admin", signout: "Sign out", signin: "Sign in", password: "Password",
     wrongpw: "Wrong password.", toomany: "Too many attempts. Try again in a few minutes.",
     guide: "📖 Show guide", save: "Save",
-    tabs: { home: "Dashboard", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
+    tabs: { monitor: "Live", home: "Dashboard", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
 
     a_nocookie: "No session cookies yet. Downloads will fail until you add one in the Cookies tab.",
     a_alldead: "Every cookie is dead. The site cannot download anything right now. Add a fresh sessionid in the Cookies tab.",
@@ -139,6 +160,25 @@ const L = {
     d_intro: "Runs every method against every cookie and shows exactly what each returns. This is the first place to look when something breaks.",
     d_what: "What you see", d_means: "What it means", d_fix: "Fix",
 
+    mo_live: "Live status", mo_checking: "Checking...", mo_updated: "Last checked",
+    mo_secago: "seconds ago", mo_refresh: "Check now", mo_auto: "Auto",
+    mo_cookies: "Cookies", mo_today: "Today", mo_rate: "Success", mo_layers: "Safety layers",
+    mo_l1: "Cookie pool", mo_l2: "Anonymous", mo_l3: "External API", mo_proxy: "Proxy",
+    mo_on: "on", mo_off: "off",
+    mo_quick: "Check a link", mo_quickhint: "Paste a reel link and I will tell you, in plain words, whether it works right now.",
+    mo_check: "Check", mo_full: "Show details",
+    mo_alerts: "Alerts and vibration", mo_vib: "Vibration on",
+    mo_vsec: "Vibration length (seconds)", mo_vrep: "How many buzzes", mo_vgap: "Gap between buzzes (ms)",
+    mo_poll: "Check every N seconds", mo_warn: "Alert on warnings too (not only when down)",
+    mo_repeat: "Remind every N minutes while a problem lasts", mo_alang: "Notification language",
+    mo_testvib: "Test vibration", mo_savealert: "Save alerts",
+    mo_phone: "Phone app and notifications", mo_install: "Install app",
+    mo_enablen: "Turn on notifications", mo_testpush: "Send a test notification",
+    mo_devices: "Connected devices", mo_offn: "Turn notifications off",
+    g_mo_alerts: "There are two kinds of alert, and they work differently.\n\n1. While the app is open — this page checks the status on its own every few seconds. The moment something is wrong the phone vibrates for exactly as many seconds as you set. No sound, vibration only.\n\n2. While the app is closed — a push notification arrives. Press \"Turn on notifications\" below once to enable that.\n\n⚠️ To silence the sound: Android Settings → Apps → Chrome → Notifications → Sites → turn sound off, keep vibration on. The web cannot mute sound separately, but your phone settings can.\n\nOn iPhone: the vibration API does not work, and push only arrives if the app is installed to the home screen.",
+    g_mo_install: "Installed to the home screen, this opens like an ordinary app with no browser address bar.\n\nAndroid: Chrome menu (⋮) → \"Add to Home screen\" or \"Install app\". The button below may also work.\n\niPhone: Safari → Share → \"Add to Home Screen\". On iPhone this is required for push notifications to arrive at all.\n\nAfter installing, the app icon takes you straight to the live page.",
+    set_probe: "Health check test link", set_probehint: "(optional)",
+    g_probe: "Every 30 minutes the site tests all cookies against one known post.\n\nWhich post?\nThe last reel that downloaded successfully is remembered automatically, so this field can usually stay empty.\n\nSetting your own permanent public reel here makes it more reliable — pick one you will never delete (your own account is ideal).\n\n⚠️ Important: if the test post is deleted or goes private, the health check now marks nothing as dead. Doing nothing is safer than wrongly killing the whole pool.",
     set_fb: "Fallback layers", set_proxy: "Proxy", set_api: "External API (last resort)",
     set_ptpl: "Proxy URL template", set_phdr: "Proxy headers (JSON)",
     set_atpl: "API endpoint template", set_ahdr: "API headers (JSON)",
@@ -202,20 +242,58 @@ export async function handleAdmin(request, url, env, ctx) {
 
   if (!(await validSession(request, env))) return page(loginForm("", t, lang), true);
 
+  const api = url.searchParams.get("api");
+  if (api) return await handleApi(api, request, url, env, lang);
+
   if (request.method === "POST") {
     const form = await request.formData();
     const msg = await runAction(url.searchParams.get("do"), form, env, lang);
     return new Response(null, { status: 302, headers: { location: "/admin?tab=" + String(form.get("tab") || "home") + "&m=" + encodeURIComponent(msg) } });
   }
 
-  if (url.searchParams.get("api") === "diag") {
-    const code = shortcode(url.searchParams.get("url") || "");
-    if (!code) return json({ error: lang === "bn" ? "এটা valid Instagram লিংক না।" : "Not a valid Instagram link." });
-    return json({ code, rows: await diagnose(code, env) });
-  }
-  if (url.searchParams.get("api") === "health") return json(await healthCheck(env));
+  return page(await body(url.searchParams.get("tab") || "monitor", env, url.searchParams.get("m") || "", lang), false);
+}
 
-  return page(await body(url.searchParams.get("tab") || "home", env, url.searchParams.get("m") || "", lang), false);
+/* ===================== json api ===================== */
+
+async function handleApi(api, request, url, env, lang) {
+  switch (api) {
+    case "status":
+    case "pubstatus": {
+      const st = await siteStatus(env);
+      st.line = statusLine(st, (st.alerts && st.alerts.lang) || lang);
+      return json(st);
+    }
+    case "health":
+      return json(await healthCheck(env));
+    case "quick":
+      return json(await quickCheck(url.searchParams.get("url") || "", env, lang));
+    case "diag":
+      return json(await fullDiagnose(url.searchParams.get("url") || "", env, lang));
+    case "vapid": {
+      const v = await getVapid(env);
+      return json({ key: v.publicKey });
+    }
+    case "subscribe": {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      const body = await request.json().catch(() => null);
+      if (!body || !body.endpoint) return json({ error: "bad subscription" }, 400);
+      const n = await addSub(env, body, request.headers.get("user-agent"));
+      return json({ ok: true, devices: n });
+    }
+    case "unsubscribe": {
+      const body = await request.json().catch(() => ({}));
+      const n = body && body.endpoint ? await removeSub(env, body.endpoint) : (await clearSubs(env), 0);
+      return json({ ok: true, devices: n });
+    }
+    case "testpush": {
+      const r = await pushAll(env);
+      const subs = await getSubs(env);
+      return json(Object.assign({ devices: subs.length }, r));
+    }
+    default:
+      return json({ error: "unknown api" }, 404);
+  }
 }
 
 /* ===================== actions ===================== */
@@ -235,6 +313,8 @@ const M = {
     notfound: "কুকি পাওয়া যায়নি।",
     revive: "সব কুকি আবার চালু। কোনটা সত্যিই কাজ করে দেখতে হেলথ চেক চালান।",
     cache: "ক্যাশ পরিষ্কার হয়েছে। পরের বার প্রতিটা লিংক নতুন করে আনা হবে।",
+    alerts: "অ্যালার্ট সেটিংস সেভ হয়েছে।",
+    addnj: "কুকি যোগ হয়েছে। টেস্ট করা যায়নি: ",
     nothing: "কিছু করার নেই।",
   },
   en: {
@@ -251,6 +331,8 @@ const M = {
     notfound: "Cookie not found.",
     revive: "All cookies re-enabled. Run a health check to see which really work.",
     cache: "Cache cleared. Every link will be fetched fresh next time.",
+    alerts: "Alert settings saved.",
+    addnj: "Cookie added. Could not test it: ",
     nothing: "Nothing to do.",
   },
 };
@@ -284,9 +366,24 @@ async function runAction(action, form, env, lang) {
     cfg.settings.proxyHeaders = String(form.get("proxyHeaders") || "").trim();
     cfg.settings.apiTemplate = String(form.get("apiTemplate") || "").trim();
     cfg.settings.apiHeaders = String(form.get("apiHeaders") || "").trim();
+    cfg.settings.probeUrl = String(form.get("probeUrl") || "").trim();
     await saveConfig(env, cfg);
     return m.settings;
   }
+  if (action === "alerts") {
+    const a = cfg.alerts;
+    a.lang = String(form.get("alertLang") || "bn") === "en" ? "en" : "bn";
+    a.vibrate = form.get("vibrate") === "1";
+    a.vibrateSeconds = clamp(parseFloat(form.get("vibrateSeconds")) || 2, 0.2, 10);
+    a.vibrateRepeat = clamp(parseInt(form.get("vibrateRepeat")) || 3, 1, 10);
+    a.vibrateGapMs = clamp(parseInt(form.get("vibrateGapMs")) || 400, 100, 3000);
+    a.pollSeconds = clamp(parseInt(form.get("pollSeconds")) || 30, 10, 600);
+    a.notifyWarn = form.get("notifyWarn") === "1";
+    a.repeatMinutes = clamp(parseInt(form.get("repeatMinutes")) || 180, 15, 1440);
+    await saveConfig(env, cfg);
+    return m.alerts;
+  }
+
   if (action === "password") {
     const a = String(form.get("pw1") || ""), b = String(form.get("pw2") || "");
     if (a.length < 8) return m.pwshort;
@@ -305,7 +402,11 @@ async function runAction(action, form, env, lang) {
       value, status: check.ok ? "ok" : "warn", fails: check.ok ? 0 : 1, uses: 0,
       lastOk: check.ok ? Date.now() : 0, lastError: check.error || "",
     });
+    // ok === null means the test post was unavailable, so the cookie is unjudged
+    const last = list[list.length - 1];
+    if (check.ok === null) { last.status = "ok"; last.fails = 0; }
     await saveCookies(env, list);
+    if (check.ok === null) return m.addnj + (check.error || "?");
     return check.ok ? m.addok : m.addfail + (check.error || "?");
   }
   if (action === "cookie_del") {
@@ -317,8 +418,13 @@ async function runAction(action, form, env, lang) {
     const c = list.find((x) => x.id === String(form.get("id") || ""));
     if (!c) return m.notfound;
     const r = await testCookie(c.value, env);
+    if (r.ok === null) {
+      c.lastError = r.error || "";
+      await saveCookies(env, list);
+      return `"${c.label}" — ${r.error || "?"}`;
+    }
     c.status = r.ok ? "ok" : "dead";
-    c.fails = r.ok ? 0 : 3;
+    c.fails = r.ok ? 0 : 5;
     if (r.ok) c.lastOk = Date.now();
     c.lastError = r.error || "";
     await saveCookies(env, list);
@@ -346,7 +452,7 @@ async function body(tab, env, msg, lang) {
   const cfg = await getConfig(env);
   const cookies = await getCookies(env);
   const live = cookies.filter((c) => c.status !== "dead").length;
-  const order = ["home", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const order = ["monitor", "home", "cookies", "ads", "seo", "settings", "diag", "help"];
 
   let alert = "";
   if (!cookies.length) alert = bad(t.a_nocookie);
@@ -355,6 +461,7 @@ async function body(tab, env, msg, lang) {
   if (cfg.settings.maintenance) alert += bad(t.a_maint);
 
   const panes = {
+    monitor: () => monitorTab(cfg, t, lang),
     home: () => homeTab(env, cookies, t),
     cookies: () => cookiesTab(cookies, t),
     ads: () => adsTab(cfg, t, lang),
@@ -376,7 +483,87 @@ async function body(tab, env, msg, lang) {
 <div class="tabs">${order.map((k) => `<a href="/admin?tab=${k}" class="${k === tab ? "on" : ""}">${t.tabs[k]}</a>`).join("")}</div>
 ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 ${alert}
-${await panes[tab in panes ? tab : "home"]()}`;
+${await panes[tab in panes ? tab : "monitor"]()}`;
+}
+
+/* ---------- live monitor ---------- */
+
+function monitorTab(cfg, t, lang) {
+  const a = cfg.alerts;
+  return `
+<div class="box statusbox">
+  <div class="stathead">
+    <h3>${t.mo_live}</h3>
+    <span class="age" id="age">${t.mo_checking}</span>
+  </div>
+  <div class="bigstat" id="bigstat">
+    <span class="ring pending" id="ring"></span>
+    <div><b id="stTitle">${t.mo_checking}</b><p id="stBody">&nbsp;</p></div>
+  </div>
+  <div class="minis" id="minis"></div>
+  <div class="row" style="margin-top:12px">
+    <button class="btn ghost" onclick="poll(true)">${t.mo_refresh}</button>
+    <button class="btn ghost" onclick="runHealth()">${t.c_healthnow}</button>
+  </div>
+  <pre id="healthout" class="out hide"></pre>
+</div>
+
+<div class="box">
+  <h3>${t.mo_layers}</h3>
+  <div class="layers" id="layers"></div>
+</div>
+
+<div class="box">
+  <h3>${t.mo_quick}</h3>
+  <p class="dim">${t.mo_quickhint}</p>
+  <input id="qurl" placeholder="https://www.instagram.com/reel/...">
+  <div class="row">
+    <button class="btn" onclick="quick()">${t.mo_check}</button>
+    <button class="btn ghost" onclick="quickFull()">${t.mo_full}</button>
+  </div>
+  <div id="qout"></div>
+</div>
+
+<div class="box">
+  <h3>${t.mo_alerts}</h3>
+  ${guide(t.guide, t.g_mo_alerts)}
+  <form method="post" action="/admin?do=alerts">
+    <input type="hidden" name="tab" value="monitor">
+    <label class="check"><input type="checkbox" name="vibrate" value="1" ${a.vibrate ? "checked" : ""}> <b>${t.mo_vib}</b></label>
+    <label>${t.mo_vsec}</label>
+    <input name="vibrateSeconds" type="number" step="0.1" min="0.2" max="10" value="${a.vibrateSeconds}">
+    <label>${t.mo_vrep}</label>
+    <input name="vibrateRepeat" type="number" min="1" max="10" value="${a.vibrateRepeat}">
+    <label>${t.mo_vgap}</label>
+    <input name="vibrateGapMs" type="number" min="100" max="3000" step="50" value="${a.vibrateGapMs}">
+    <div class="row" style="margin-top:10px">
+      <button type="button" class="btn ghost" onclick="testVib()">${t.mo_testvib}</button>
+    </div>
+    <label>${t.mo_poll}</label>
+    <input name="pollSeconds" type="number" min="10" max="600" value="${a.pollSeconds}">
+    <label>${t.mo_repeat}</label>
+    <input name="repeatMinutes" type="number" min="15" max="1440" value="${a.repeatMinutes}">
+    <label>${t.mo_alang}</label>
+    <select name="alertLang">
+      <option value="bn" ${a.lang === "bn" ? "selected" : ""}>বাংলা</option>
+      <option value="en" ${a.lang === "en" ? "selected" : ""}>English</option>
+    </select>
+    <label class="check"><input type="checkbox" name="notifyWarn" value="1" ${a.notifyWarn ? "checked" : ""}> ${t.mo_warn}</label>
+    <button class="btn">${t.mo_savealert}</button>
+  </form>
+</div>
+
+<div class="box">
+  <h3>${t.mo_phone}</h3>
+  ${guide(t.guide, t.g_mo_install)}
+  <div class="row">
+    <button class="btn" id="btnNotif" onclick="enableNotif()">${t.mo_enablen}</button>
+    <button class="btn ghost" id="btnInstall" onclick="doInstall()" style="display:none">${t.mo_install}</button>
+    <button class="btn ghost" onclick="testPush()">${t.mo_testpush}</button>
+  </div>
+  <p class="dim" id="notifState">${t.mo_devices}: <b id="devCount">—</b></p>
+  <pre id="pushout" class="out hide"></pre>
+</div>`;
 }
 
 /* ---------- dashboard ---------- */
@@ -629,6 +816,9 @@ function settingsTab(cfg, t) {
     <input name="tgToken" value="${esc(cfg.settings.telegramToken)}" placeholder="1234:AA...">
     <label>${t.set_chat}</label>
     <input name="tgChat" value="${esc(cfg.settings.telegramChat)}" placeholder="123456789">
+    <label>${t.set_probe} <span class="dim">${t.set_probehint}</span></label>
+    <input name="probeUrl" value="${esc(cfg.settings.probeUrl || "")}" placeholder="https://www.instagram.com/reel/...">
+    ${guide(t.guide, t.g_probe)}
     <h3 style="margin-top:22px">${t.set_fb}</h3>
     ${guide(t.guide, t.g_layers)}
     <h3 style="margin-top:18px">${t.set_proxy} <span class="dim">${t.set_optional}</span></h3>
@@ -662,30 +852,21 @@ function settingsTab(cfg, t) {
 /* ---------- diagnostics ---------- */
 
 function diagTab(t, lang) {
-  const rows = lang === "bn"
-    ? [["<code>ok: true</code>", "কাজ করছে", "কিছু করার নেই"],
-       ["<code>http 401</code> / <code>login wall</code>", "Instagram কুকি গ্রহণ করেনি", "নতুন sessionid যোগ করুন"],
-       ["<code>http 429</code>", "ওই অ্যাকাউন্টে অতিরিক্ত রিকোয়েস্ট", "আরও কুকি যোগ করুন, ক্যাশ সময় বাড়ান"],
-       ["<code>no items</code> / <code>404</code>", "পোস্ট প্রাইভেট বা ডিলিট করা", "কিছু করার নেই — স্বাভাবিক"],
-       ["<code>bad shortcode</code>", "এটা পোস্টের লিংক না", "Share → Copy link ব্যবহার করুন"]]
-    : [["<code>ok: true</code>", "Working", "Nothing to do"],
-       ["<code>http 401</code> / <code>login wall</code>", "Instagram rejected the cookie", "Add a fresh sessionid"],
-       ["<code>http 429</code>", "Too many requests on that account", "Add more cookies, raise cache duration"],
-       ["<code>no items</code> / <code>404</code>", "Post is private or deleted", "Nothing — expected"],
-       ["<code>bad shortcode</code>", "Not a post link", "Use Share → Copy link"]];
-
   return `
 <div class="box">
   <h3>${t.d_test}</h3>
   <p class="dim">${t.d_intro}</p>
   <input id="diagurl" placeholder="https://www.instagram.com/reel/...">
   <button class="btn" onclick="runDiag()">${t.d_run}</button>
-  <pre id="diagout" class="out hide"></pre>
+  <div id="diagout"></div>
 </div>
 <div class="box">
-  <h3>${t.d_read}</h3>
-  <table class="wide"><tr><th>${t.d_what}</th><th>${t.d_means}</th><th>${t.d_fix}</th></tr>
-  ${rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("")}</table>
+  <h3>${lang === "bn" ? "কীভাবে পড়বেন" : "How to read this"}</h3>
+  <p class="dim">${
+    lang === "bn"
+      ? "সাইট পরপর কয়েকটা পদ্ধতি চেষ্টা করে এবং প্রথমটা সফল হলেই থেমে যায়। তাই নিচে কিছু লাল সারি থাকা স্বাভাবিক — একটা সবুজ থাকলেই ইউজাররা ভিডিও পাবে। প্রতিটা সারিতে কী হয়েছে, তার মানে কী, আর কী করতে হবে — তিনটাই সহজ ভাষায় লেখা থাকে।"
+      : "The site tries several routes in order and stops at the first success, so some red rows are normal — one green row means visitors get the video. Each row explains what happened, what it means and what to do, in plain words."
+  }</p>
 </div>`;
 }
 
@@ -764,6 +945,7 @@ function stat(label, value, tone = "") {
 function postBtn(action, tab, label, cls = "") {
   return `<form method="post" action="/admin?do=${action}" style="display:inline"><input type="hidden" name="tab" value="${tab}"><button class="btn ${cls}">${label}</button></form>`;
 }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function bad(t) { return `<div class="alert bad">${esc(t)}</div>`; }
 function mid(t) { return `<div class="alert mid">${esc(t)}</div>`; }
 function ago(ts) {
@@ -799,6 +981,14 @@ function page(inner, bare) {
     `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="theme-color" content="#0b0b11">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Admin">
+<link rel="manifest" href="/admin/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
 <title>Admin — IGtoDownload</title>
 <style>${ACSS}</style></head>
 <body class="${bare ? "bare" : ""}"><div class="wrap">${inner}</div>
@@ -912,6 +1102,43 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 .slothead select{width:auto;padding:6px 9px;font-size:12.5px;margin-left:auto}
 .out{background:#0d0d13;border:1px solid #26262f;border-radius:10px;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;margin-top:12px;max-height:340px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}
 .hide{display:none}
+.stathead{display:flex;align-items:center;gap:10px}
+.stathead h3{margin:0}
+.age{margin-left:auto;color:#8c8c9b;font-size:12px}
+.bigstat{display:flex;gap:14px;align-items:center;margin-top:14px}
+.bigstat b{display:block;font-size:17px;line-height:1.35}
+.bigstat p{color:#9a9aa8;font-size:13.5px;margin-top:4px;line-height:1.55}
+.ring{width:46px;height:46px;border-radius:50%;flex:none;position:relative;display:grid;place-items:center}
+.ring::after{content:"";width:16px;height:16px;border-radius:50%}
+.ring.pending{background:rgba(140,140,155,.15)}.ring.pending::after{background:#8c8c9b}
+.ring.ok{background:rgba(43,217,124,.14)}.ring.ok::after{background:#2bd97c}
+.ring.warn{background:rgba(255,170,60,.14)}.ring.warn::after{background:#ffaa3c}
+.ring.down{background:rgba(255,92,138,.14)}.ring.down::after{background:#ff5c8a;animation:beat 1.1s ease-in-out infinite}
+@keyframes beat{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.6}}
+.ring.down{animation:halo 1.6s ease-out infinite}
+@keyframes halo{0%{box-shadow:0 0 0 0 rgba(255,92,138,.35)}100%{box-shadow:0 0 0 16px rgba(255,92,138,0)}}
+.minis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.mini-c{background:#0f0f16;border:1px solid #23232c;border-radius:12px;padding:10px;text-align:center}
+.mini-c span{display:block;color:#8c8c9b;font-size:11px}
+.mini-c b{font-size:17px}
+.layers{display:grid;gap:8px}
+.layer{display:flex;align-items:center;gap:9px;background:#0f0f16;border:1px solid #23232c;border-radius:11px;padding:11px 13px;font-size:13.5px}
+.layer .num{width:20px;height:20px;border-radius:6px;background:#1f1f29;display:grid;place-items:center;font-size:11px;font-weight:700;color:#9a9aa8;flex:none}
+.layer .pill{margin-left:auto;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:7px}
+.pill.on{background:rgba(43,217,124,.14);color:#2bd97c}
+.pill.off{background:rgba(140,140,155,.12);color:#8c8c9b}
+.verdict{border-radius:13px;padding:14px 15px;margin-top:13px;font-size:14px;line-height:1.6}
+.verdict b{display:block;font-size:15px;margin-bottom:5px}
+.verdict.ok{background:rgba(43,217,124,.09);border:1px solid rgba(43,217,124,.33)}
+.verdict.mid{background:rgba(255,170,60,.08);border:1px solid rgba(255,170,60,.3)}
+.verdict.bad{background:rgba(255,92,138,.08);border:1px solid rgba(255,92,138,.33)}
+.drow{background:#0f0f16;border:1px solid #23232c;border-radius:12px;padding:12px 13px;margin-top:8px}
+.drow .dh{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:700}
+.drow .tick{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;flex:none;color:#0b0b11;font-weight:800}
+.tick.y{background:#2bd97c}.tick.n{background:#ff5c8a}
+.drow .who2{margin-left:auto;color:#8c8c9b;font-size:11.5px;font-weight:500}
+.drow p{color:#9a9aa8;font-size:13px;margin-top:6px;line-height:1.6}
+.drow .fix{color:#ffb86b;font-size:13px;margin-top:5px;line-height:1.6}
 .login{width:100%;max-width:330px}
 .login .logo{justify-content:center;margin-bottom:18px}
 .login .btn{width:100%}
@@ -919,23 +1146,165 @@ a{color:#ff8ab0}
 `;
 
 const AJS = `
+var AL={vibrate:true,vibrateSeconds:2,vibrateRepeat:3,vibrateGapMs:400,pollSeconds:30,notifyWarn:true};
+var lastLevel=null, timer=null, deferredPrompt=null;
+
 function show(id,txt){var e=document.getElementById(id);if(!e)return;e.classList.remove('hide');e.textContent=txt}
-function runDiag(){
-  var v=document.getElementById('diagurl').value.trim();
-  if(!v){alert('Paste a link first');return}
-  show('diagout','Testing...');
-  fetch('/admin?api=diag&url='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(d){
-    if(d.error){show('diagout',d.error);return}
-    var s='shortcode: '+d.code+'\\n\\n';
-    d.rows.forEach(function(r){s+=(r.ok?'  OK  ':' FAIL ')+' | '+pad(r.cookie,16)+' | '+pad(r.method,14)+' | '+pad(r.ms+'ms',7)+' | '+(r.ok?('items: '+r.items):(r.error||''))+'\\n'});
-    show('diagout',s);
-  }).catch(function(){show('diagout','Request failed.')});
+function el(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+
+/* ---------- vibration ---------- */
+function pattern(){
+  if(!AL.vibrate) return null;
+  var on=Math.max(200,Math.round((AL.vibrateSeconds||2)*1000));
+  var gap=Math.max(100,AL.vibrateGapMs||400);
+  var n=Math.min(10,Math.max(1,AL.vibrateRepeat||3));
+  var p=[];for(var i=0;i<n;i++){p.push(on);if(i<n-1)p.push(gap)}
+  return p;
 }
+function buzz(){
+  var p=pattern();
+  if(!p) return false;
+  if(navigator.vibrate){try{navigator.vibrate(p);return true}catch(e){}}
+  return false;
+}
+function testVib(){
+  var f=el('vibrateSeconds'), r=el('vibrateRepeat'), g=el('vibrateGapMs');
+  var form=document.querySelector('form[action*="do=alerts"]');
+  if(form){
+    AL.vibrateSeconds=parseFloat(form.vibrateSeconds.value)||2;
+    AL.vibrateRepeat=parseInt(form.vibrateRepeat.value)||3;
+    AL.vibrateGapMs=parseInt(form.vibrateGapMs.value)||400;
+    AL.vibrate=form.vibrate.checked;
+  }
+  if(!buzz()) alert('This phone or browser does not support vibration (iPhone does not).');
+}
+
+/* ---------- live polling ---------- */
+function poll(manual){
+  if(!el('bigstat')) return;
+  fetch('/admin?api=status',{cache:'no-store'}).then(function(r){return r.json()}).then(function(st){
+    if(st.alerts) AL=Object.assign(AL,st.alerts);
+    paint(st);
+    var bad = st.level==='down' || (st.level==='warn' && AL.notifyWarn);
+    if(bad && lastLevel!==null && lastLevel!==st.level) buzz();
+    lastLevel=st.level;
+    schedule();
+  }).catch(function(){ if(el('age'))el('age').textContent='connection problem'; schedule(); });
+}
+function schedule(){
+  if(timer)clearTimeout(timer);
+  timer=setTimeout(poll,Math.max(10,AL.pollSeconds||30)*1000);
+}
+function paint(st){
+  var ring=el('ring'); ring.className='ring '+st.level;
+  el('stTitle').textContent=st.line?st.line.title:'';
+  el('stBody').textContent=st.line?st.line.body:'';
+  el('age').textContent=new Date(st.at).toLocaleTimeString();
+  var c=st.cookies;
+  el('minis').innerHTML=
+    mini('Cookies',(c.live+c.warn)+' / '+c.total)+
+    mini('Today',st.stats.today)+
+    mini('Success',st.stats.rate+'%');
+  var L=el('layers');
+  if(L) L.innerHTML=
+    layer(1,'Cookie pool',(c.live+c.warn)+' usable',(c.live+c.warn)>0)+
+    layer(2,'Anonymous','always tried',true)+
+    layer(3,'External API',st.fallbacks.externalApi?'configured':'not set',st.fallbacks.externalApi)+
+    layer('P','Proxy',st.fallbacks.proxy?'configured':'direct',st.fallbacks.proxy);
+  var dc=el('devCount'); if(dc)dc.textContent=st.push.devices;
+}
+function mini(l,v){return '<div class="mini-c"><span>'+l+'</span><b>'+v+'</b></div>'}
+function layer(n,name,note,on){
+  return '<div class="layer"><span class="num">'+n+'</span><span>'+name+'</span>'+
+         '<span class="pill '+(on?'on':'off')+'">'+note+'</span></div>';
+}
+
+/* ---------- quick check ---------- */
+function quick(){
+  var v=el('qurl').value.trim(); if(!v){alert('Paste a link first');return}
+  el('qout').innerHTML='<div class="verdict mid"><b>...</b>checking</div>';
+  fetch('/admin?api=quick&url='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(d){
+    el('qout').innerHTML='<div class="verdict '+d.tone+'"><b>'+esc(d.head)+'</b>'+esc(d.body)+'</div>';
+  }).catch(function(){el('qout').innerHTML='<div class="verdict bad"><b>Failed</b>Request did not complete.</div>'});
+}
+function quickFull(){
+  var v=el('qurl').value.trim(); if(!v){alert('Paste a link first');return}
+  el('qout').innerHTML='<div class="verdict mid"><b>...</b>running every route</div>';
+  fetchDiag(v,'qout');
+}
+function runDiag(){
+  var v=el('diagurl').value.trim(); if(!v){alert('Paste a link first');return}
+  el('diagout').innerHTML='<div class="verdict mid"><b>...</b>running every route with every cookie</div>';
+  fetchDiag(v,'diagout');
+}
+function fetchDiag(v,target){
+  fetch('/admin?api=diag&url='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(d){
+    if(d.error){el(target).innerHTML='<div class="verdict bad"><b>'+esc(d.error)+'</b></div>';return}
+    var h='<div class="verdict '+d.verdict.tone+'"><b>'+esc(d.verdict.head)+'</b>'+esc(d.verdict.body)+'</div>';
+    d.rows.forEach(function(r){
+      h+='<div class="drow"><div class="dh"><span class="tick '+(r.ok?'y':'n')+'">'+(r.ok?'\\u2713':'\\u00d7')+'</span>'+
+         esc(r.plain.head)+'<span class="who2">'+esc(r.label)+' \\u00b7 '+esc(r.cookie)+' \\u00b7 '+r.ms+'ms</span></div>'+
+         '<p>'+esc(r.plain.why)+'</p>'+(r.plain.fix?'<p class="fix">\\u2192 '+esc(r.plain.fix)+'</p>':'')+'</div>';
+    });
+    el(target).innerHTML=h;
+  }).catch(function(){el(target).innerHTML='<div class="verdict bad"><b>Failed</b>Request did not complete.</div>'});
+}
+
+/* ---------- health check ---------- */
 function runHealth(){
-  show('healthout','Checking...');
+  show('healthout','Checking every cookie...');
   fetch('/admin?api=health').then(function(r){return r.json()}).then(function(d){
-    show('healthout','Checked: '+d.checked+'\\nWorking: '+d.live+'\\nRevived: '+(d.revived||0)+'\\n\\nReload the page to see updated statuses.');
+    show('healthout','Checked: '+d.checked+'\\nWorking: '+d.live+'\\nRevived: '+(d.revived||0)+(d.note?'\\n\\n'+d.note:''));
+    poll(true);
   }).catch(function(){show('healthout','Request failed.')});
 }
-function pad(s,n){s=String(s||'');while(s.length<n)s+=' ';return s}
+
+/* ---------- push + install ---------- */
+function b64ToU8(b){
+  var pad='='.repeat((4-b.length%4)%4);
+  var raw=atob((b+pad).replace(/-/g,'+').replace(/_/g,'/'));
+  var out=new Uint8Array(raw.length);
+  for(var i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);
+  return out;
+}
+async function enableNotif(){
+  try{
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)){
+      alert('This browser cannot receive push notifications. On iPhone, install the app to the home screen first.');return;
+    }
+    var reg=await navigator.serviceWorker.register('/sw.js',{scope:'/admin'});
+    await navigator.serviceWorker.ready;
+    var perm=await Notification.requestPermission();
+    if(perm!=='granted'){alert('Notifications were not allowed. Enable them in your browser site settings.');return}
+    var kr=await fetch('/admin?api=vapid');var k=await kr.json();
+    var sub=await reg.pushManager.getSubscription();
+    if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToU8(k.key)});
+    var res=await fetch('/admin?api=subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub.toJSON?sub.toJSON():sub)});
+    var out=await res.json();
+    show('pushout','Notifications are on. Connected devices: '+(out.devices||1));
+    var dc=el('devCount'); if(dc)dc.textContent=out.devices||1;
+  }catch(e){ show('pushout','Could not turn on notifications: '+(e&&e.message||e)); }
+}
+function testPush(){
+  show('pushout','Sending...');
+  fetch('/admin?api=testpush').then(function(r){return r.json()}).then(function(d){
+    show('pushout','Devices: '+d.devices+'\\nSent: '+d.sent+'\\nFailed: '+d.failed+'\\nExpired: '+d.gone+
+      (d.devices?'\\n\\nIf nothing arrived, check the browser notification permission.':'\\n\\nNo device registered yet — press "Turn on notifications" first.'));
+  }).catch(function(){show('pushout','Request failed.')});
+}
+window.addEventListener('beforeinstallprompt',function(e){
+  e.preventDefault(); deferredPrompt=e;
+  var b=el('btnInstall'); if(b)b.style.display='';
+});
+async function doInstall(){
+  if(!deferredPrompt){alert('Use your browser menu: Add to Home screen.');return}
+  deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null;
+  var b=el('btnInstall'); if(b)b.style.display='none';
+}
+
+/* ---------- boot ---------- */
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/admin'}).catch(function(){}); }
+if(el('bigstat')) poll(true);
+document.addEventListener('visibilitychange',function(){ if(!document.hidden&&el('bigstat')) poll(true); });
 `;

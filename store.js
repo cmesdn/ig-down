@@ -2,7 +2,7 @@
  * store.js — KV config, cookie pool, D1 stats
  */
 
-const MEM = { cfg: null, cfgExp: 0, ck: null, ckExp: 0, rr: 0, dbReady: false };
+const MEM = { cfg: null, cfgExp: 0, ck: null, ckExp: 0, rr: 0, dbReady: false, probe: null, probeExp: 0 };
 const TTL = 60_000; // in-isolate cache, keeps KV reads tiny at scale
 
 export const DEFAULT_CONFIG = {
@@ -22,6 +22,17 @@ export const DEFAULT_CONFIG = {
     // optional: last-resort external resolver API
     apiTemplate: "",
     apiHeaders: "",
+    probeUrl: "",
+  },
+  alerts: {
+    lang: "bn",
+    vibrate: true,
+    vibrateSeconds: 2,
+    vibrateRepeat: 3,
+    vibrateGapMs: 400,
+    pollSeconds: 30,
+    notifyWarn: true,
+    repeatMinutes: 180,
   },
   ads: {},
   seo: {},
@@ -94,12 +105,42 @@ export function flushCookieCache() {
   MEM.ckExp = 0;
 }
 
-/** healthy cookies in round-robin order, so load spreads evenly */
+/**
+ * Healthy cookies first, in round-robin order so load spreads evenly.
+ * Dead ones are appended rather than dropped: if every cookie is marked dead
+ * the site still tries them, and a working one revives itself on the spot.
+ */
 export function pickOrder(list) {
-  const live = list.filter((c) => c.status !== "dead" && c.value);
-  if (!live.length) return [];
+  const usable = list.filter((c) => c.value);
+  const live = usable.filter((c) => c.status !== "dead");
+  const dead = usable.filter((c) => c.status === "dead");
+  if (!live.length) return dead;
   const start = MEM.rr++ % live.length;
-  return live.slice(start).concat(live.slice(0, start));
+  return live.slice(start).concat(live.slice(0, start)).concat(dead);
+}
+
+/* ---- probe code: a post we know exists, used by the health check ---- */
+
+export async function rememberGoodCode(env, code) {
+  const now = Date.now();
+  if (MEM.probe === code && now < MEM.probeExp) return;
+  MEM.probe = code;
+  MEM.probeExp = now + 1800_000; // write at most twice an hour
+  try { await env.CONFIG.put("lastgood", code); } catch (_) {}
+}
+
+export async function probeCode(env, cfg) {
+  try {
+    const v = await env.CONFIG.get("lastgood");
+    if (v) return v;
+  } catch (_) {}
+  const u = cfg && cfg.settings && cfg.settings.probeUrl;
+  if (u) {
+    const m = String(u).match(/\/(?:reels?|p|tv)\/([A-Za-z0-9_\-]{5,})/);
+    if (m) return m[1];
+    if (/^[A-Za-z0-9_\-]{8,16}$/.test(String(u).trim())) return String(u).trim();
+  }
+  return null;
 }
 
 export function normalizeCookie(v) {
