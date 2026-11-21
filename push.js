@@ -31,14 +31,18 @@ export async function getVapid(env) {
 
 async function jwt(audience, vapid, subject) {
   const header = { typ: "JWT", alg: "ES256" };
-  const payload = { aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: subject || "mailto:admin@example.com" };
+  const payload = { aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: subject || "mailto:admin@igtodownload.com" };
   const data = b64u(enc(JSON.stringify(header))) + "." + b64u(enc(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("jwk", vapid.privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc(data));
   return data + "." + b64u(new Uint8Array(sig));
 }
 
-/** One payload-free push to one endpoint. Returns "ok" | "gone" | "fail". */
+/**
+ * One payload-free push to one endpoint.
+ * Returns { r: "ok" | "gone" | "fail", status } — status is the push
+ * service's HTTP code (0 when it could not be reached), kept for diagnostics.
+ */
 export async function sendTickle(endpoint, vapid, subject, ttl) {
   try {
     const u = new URL(endpoint);
@@ -52,12 +56,28 @@ export async function sendTickle(endpoint, vapid, subject, ttl) {
         Authorization: "vapid t=" + token + ", k=" + vapid.publicKey,
       },
     });
-    if (r.status === 404 || r.status === 410) return "gone";
-    if (r.ok || r.status === 201 || r.status === 202) return "ok";
-    return "fail";
+    if (r.status === 404 || r.status === 410) return { r: "gone", status: r.status };
+    if (r.ok) return { r: "ok", status: r.status };
+    return { r: "fail", status: r.status };
   } catch (_) {
-    return "fail";
+    return { r: "fail", status: 0 };
   }
+}
+
+/** What a push-service status code means, in plain words. */
+export function explainPush(status, lang) {
+  const bn = lang === "bn";
+  if (status >= 200 && status < 300)
+    return bn ? "পৌঁছে গেছে। ফোন অনলাইনে থাকলে কয়েক সেকেন্ডের মধ্যে দেখাবে।" : "Delivered. It should appear within seconds if the phone is online.";
+  if (status === 404 || status === 410)
+    return bn ? "এই ফোন নোটিফিকেশন বন্ধ করেছে বা অ্যাপ মুছেছে — তালিকা থেকে বাদ দেওয়া হলো।" : "This phone turned notifications off or removed the app — taken off the list.";
+  if (status === 401 || status === 403)
+    return bn ? "পুশ সার্ভিস আমাদের স্বাক্ষর মানেনি। ফোনে নোটিফিকেশন একবার বন্ধ করে আবার চালু করলে ঠিক হবে।" : "The push service rejected our signature. Turning notifications off and on again on the phone fixes it.";
+  if (status === 429)
+    return bn ? "অল্প সময়ে অনেক বেশি পাঠানো হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।" : "Too many sent in a short time. Try again shortly.";
+  if (status === 0)
+    return bn ? "পুশ সার্ভিসে পৌঁছানো যায়নি। একটু পর আবার চেষ্টা করুন।" : "Could not reach the push service. Try again shortly.";
+  return (bn ? "পুশ সার্ভিস ভুল জানিয়েছে, কোড " : "The push service returned an error, code ") + status + ".";
 }
 
 /* ===================== subscriptions ===================== */
@@ -95,36 +115,23 @@ export async function clearSubs(env) {
 
 export async function pushAll(env, subject) {
   const subs = await getSubs(env);
-  if (!subs.length) return { sent: 0, failed: 0, gone: 0 };
+  if (!subs.length) return { sent: 0, failed: 0, gone: 0, codes: {} };
   const vapid = await getVapid(env);
   let sent = 0, failed = 0, gone = 0;
+  const codes = {};
   const dead = [];
-
   for (const s of subs) {
-    try {
-      const u = new URL(s.endpoint);
-      const token = await jwt(u.origin, vapid, subject);
-      const r = await fetch(s.endpoint, {
-        method: "POST",
-        headers: {
-          TTL: "300",
-          Urgency: "high",
-          "Content-Length": "0",
-          Authorization: "vapid t=" + token + ", k=" + vapid.publicKey,
-        },
-      });
-      if (r.status === 404 || r.status === 410) { gone++; dead.push(s.endpoint); }
-      else if (r.ok || r.status === 201 || r.status === 202) sent++;
-      else failed++;
-    } catch (_) {
-      failed++;
-    }
+    const res = await sendTickle(s.endpoint, vapid, subject, 300);
+    codes[res.status] = (codes[res.status] || 0) + 1;
+    if (res.r === "ok") sent++;
+    else if (res.r === "gone") { gone++; dead.push(s.endpoint); }
+    else failed++;
   }
   if (dead.length) {
     const keep = subs.filter((s) => !dead.includes(s.endpoint));
     await env.CONFIG.put(SUBS_KEY, JSON.stringify(keep));
   }
-  return { sent, failed, gone };
+  return { sent, failed, gone, codes };
 }
 
 /**

@@ -8,7 +8,7 @@
  * chunks of 40 and shows a progress bar.
  */
 
-import { getVapid, sendTickle } from "./push.js";
+import { getVapid, sendTickle, explainPush } from "./push.js";
 
 const BATCH = 40;
 let READY = false;
@@ -22,19 +22,29 @@ async function init(env) {
     "CREATE TABLE IF NOT EXISTS broadcasts (id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER, title TEXT, body TEXT, url TEXT, image TEXT, countries TEXT, target INTEGER DEFAULT 0, sent INTEGER DEFAULT 0, failed INTEGER DEFAULT 0, gone INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, cursor INTEGER DEFAULT 0, done INTEGER DEFAULT 0)"
   );
   await env.STATS.exec("CREATE INDEX IF NOT EXISTS idx_subs_country ON subs (country)");
+  try { await env.STATS.exec("ALTER TABLE subs ADD COLUMN device TEXT"); } catch (_) {}
   READY = true;
 }
 
 /* ===================== public: subscribe ===================== */
 
-export async function subscribeUser(env, sub, country) {
+function deviceOf(ua) {
+  ua = ua || "";
+  if (/android/i.test(ua)) return "android";
+  if (/iphone|ipad|ipod/i.test(ua)) return "ios";
+  if (/windows|macintosh|linux|cros/i.test(ua)) return "desktop";
+  return "other";
+}
+
+export async function subscribeUser(env, sub, country, ua) {
   if (!env.STATS) return { ok: false };
   if (!sub || typeof sub.endpoint !== "string" || !/^https:\/\//.test(sub.endpoint)) return { ok: false };
   await init(env);
   await env.STATS.prepare(
-    "INSERT INTO subs (endpoint, country, created, active) VALUES (?,?,?,1) ON CONFLICT(endpoint) DO UPDATE SET active=1, country=excluded.country"
+    "INSERT INTO subs (endpoint, country, created, active, device) VALUES (?,?,?,1,?) " +
+      "ON CONFLICT(endpoint) DO UPDATE SET active=1, country=excluded.country, created=excluded.created, device=excluded.device"
   )
-    .bind(sub.endpoint.slice(0, 600), (country || "").slice(0, 2), Date.now())
+    .bind(sub.endpoint.slice(0, 600), (country || "").slice(0, 2), Date.now(), deviceOf(ua))
     .run();
   return { ok: true };
 }
@@ -124,9 +134,11 @@ export async function sendBatch(env, id) {
   let sent = 0, failed = 0, gone = 0;
   const dead = [];
   const results = await Promise.all(rows.map((r) => sendTickle(r.endpoint, vapid)));
+  const codes = {};
   results.forEach((res, i) => {
-    if (res === "ok") sent++;
-    else if (res === "gone") { gone++; dead.push(rows[i].id); }
+    codes[res.status] = (codes[res.status] || 0) + 1;
+    if (res.r === "ok") sent++;
+    else if (res.r === "gone") { gone++; dead.push(rows[i].id); }
     else failed++;
   });
 
@@ -146,13 +158,31 @@ export async function sendBatch(env, id) {
     failed: b.failed + failed,
     gone: b.gone + gone,
     target: b.target,
+    codes,
   };
+}
+
+/** Test one subscriber: shows exactly what the push service answered. */
+export async function testOne(env, id, lang) {
+  await init(env);
+  const row = await env.STATS.prepare("SELECT id, endpoint FROM subs WHERE id=?").bind(+id || 0).first();
+  if (!row) return { ok: false, status: 404, text: lang === "bn" ? "এই ডিভাইস আর তালিকায় নেই।" : "That device is no longer on the list." };
+  await env.CONFIG.put("broadcast", JSON.stringify({
+    id: 0,
+    title: lang === "bn" ? "পরীক্ষামূলক নোটিফিকেশন" : "Test notification",
+    body: lang === "bn" ? "এটা দেখতে পেলে এই ফোনে নোটিফিকেশন ঠিকমতো কাজ করছে।" : "If you can see this, notifications work on this phone.",
+    url: "/",
+    image: "",
+  }));
+  const res = await sendTickle(row.endpoint, await getVapid(env), null, 600);
+  if (res.r === "gone") await env.STATS.prepare("UPDATE subs SET active=0 WHERE id=?").bind(row.id).run();
+  return { ok: res.r === "ok", status: res.status, text: explainPush(res.status, lang) };
 }
 
 /* ===================== admin: numbers ===================== */
 
 export async function audience(env) {
-  const empty = { subscribers: 0, countries: [], installs7: 0, installs30: 0, opens7: 0, shares7: 0, recent: [] };
+  const empty = { subscribers: 0, countries: [], installs7: 0, installs30: 0, opens7: 0, shares7: 0, recent: [], devices: [] };
   if (!env.STATS) return empty;
   try {
     await init(env);
@@ -169,6 +199,8 @@ export async function audience(env) {
       installs30: await one("SELECT COUNT(*) n FROM events WHERE kind='install' AND day>=?", d30),
       opens7: await one("SELECT COUNT(*) n FROM events WHERE kind='app_open' AND day>=?", d7),
       shares7: await one("SELECT COUNT(*) n FROM events WHERE kind='share_in' AND day>=?", d7),
+      devices:
+        (await env.STATS.prepare("SELECT id, country, device, created FROM subs WHERE active=1 ORDER BY id DESC LIMIT 8").all()).results || [],
       recent:
         (await env.STATS.prepare("SELECT id, created, title, image, countries, target, sent, failed, gone, clicks, done FROM broadcasts ORDER BY id DESC LIMIT 10").all())
           .results || [],

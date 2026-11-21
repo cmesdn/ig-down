@@ -201,7 +201,22 @@ body.has-sticky .appbar{bottom:86px}
 /* ---- history sheet ---- */
 .histbtn{background:var(--card);border:1px solid var(--line);color:var(--mut);width:36px;height:36px;border-radius:11px;cursor:pointer;flex:none;display:grid;place-items:center;transition:transform .2s cubic-bezier(.22,1,.36,1)}
 .histbtn:active{transform:scale(.92)}
-@media(max-width:620px){.histbtn{margin-left:auto}}
+@media(max-width:620px){.histbtn{margin-left:auto}.bellbtn+.histbtn{margin-left:0}}
+.bellbtn{display:none}
+html.app .bellbtn{display:grid}
+.bellbtn.on{color:var(--acc,#e1306c)}
+.appsec{margin:34px 0 8px;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:var(--card);display:grid;grid-template-columns:1.1fr 1fr;align-items:center}
+.appsec img{width:100%;height:auto;display:block;aspect-ratio:1200/630;object-fit:cover}
+.aps-tx{padding:22px 24px}
+.aps-tx h2{margin:0 0 10px;font-size:22px;line-height:1.25}
+.aps-tx ul{margin:0 0 16px;padding:0;list-style:none;display:grid;gap:8px}
+.aps-tx li{padding-left:24px;position:relative;color:var(--mut);font-size:14.5px;line-height:1.45}
+.aps-tx li:before{content:"";position:absolute;left:3px;top:4px;width:11px;height:6px;border:solid #2bd97c;border-width:0 0 2.4px 2.4px;transform:rotate(-45deg)}
+.aps-go{display:inline-flex;align-items:center;gap:9px;border:0;cursor:pointer;color:#fff;font:inherit;font-weight:700;font-size:15.5px;padding:13px 22px;border-radius:14px;background:linear-gradient(90deg,#f58529,#dd2a7b 50%,#8134af);box-shadow:0 8px 24px rgba(221,42,123,.3);transition:transform .2s cubic-bezier(.22,1,.36,1)}
+.aps-go:active{transform:scale(.96)}
+.aps-help{margin:12px 0 0;font-size:13.5px;line-height:1.5;color:var(--mut);background:var(--bg);border:1px dashed var(--line);border-radius:12px;padding:10px 12px}
+@media(max-width:720px){.appsec{grid-template-columns:1fr}.aps-tx{padding:18px}.aps-go{width:100%;justify-content:center}}
+html.app .appsec{display:none}
 .histbtn svg{width:17px;height:17px}
 .sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;opacity:0;pointer-events:none;transition:opacity .3s ease}
 .sheet-bg.show{opacity:1;pointer-events:auto}
@@ -419,17 +434,70 @@ function offerNotify(){
   res.appendChild(box);
   box.querySelector('button').onclick = async function(){
     LS.set('igto_notify_asked', Date.now());
-    try {
-      var reg = await navigator.serviceWorker.register('/app-sw.js', { scope: '/' }); await navigator.serviceWorker.ready;
-      var perm = await Notification.requestPermission();
-      if (perm !== 'granted') { box.remove(); ev('notify_decline'); return; }
-      var k = await (await fetch('/api/push/key')).json();
-      var sub = await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u8(k.key) });
-      await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sub.toJSON ? sub.toJSON() : sub) });
-      box.innerHTML = '<span><b>You are in.</b> We will only ping you when it matters.</span>'; ev('notify_accept');
-    } catch (e) { box.remove(); }
+    var r = await subscribePush();
+    if (r === 'ok') { box.innerHTML = '<span><b>You are in.</b> We will only ping you when it matters.</span>'; ev('notify_accept'); }
+    else { box.remove(); if (r === 'denied') ev('notify_decline'); }
   };
 }
+
+async function subscribePush(){
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'unsupported';
+    var reg = await navigator.serviceWorker.register('/app-sw.js', { scope: '/' }); await navigator.serviceWorker.ready;
+    var perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') return 'denied';
+    var k = await (await fetch('/api/push/key')).json();
+    var key = b64u8(k.key), sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options && sub.options.applicationServerKey) {          // key changed on the server -> renew
+      var a1 = new Uint8Array(sub.options.applicationServerKey);
+      if (a1.length !== key.length || a1.some(function(v, i){ return v !== key[i]; })) { await sub.unsubscribe(); sub = null; }
+    }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    var r = await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sub.toJSON ? sub.toJSON() : sub) });
+    if (!r.ok) return 'error';
+    LS.set('igto_sub_day', new Date().toISOString().slice(0, 10));
+    return 'ok';
+  } catch (e) { return 'error'; }
+}
+
+/* ---------- bell (installed app): subscribe any time, and keep the subscription fresh ---------- */
+(function(){
+  var bell = document.getElementById('bellbtn'); if (!bell) return;
+  var P = C.push || {};
+  function paint(){ var on = ('Notification' in window) && Notification.permission === 'granted' && LS.get('igto_sub_day', ''); bell.classList.toggle('on', !!on); }
+  paint();
+  if (standalone && P.enabled && ('Notification' in window) && Notification.permission === 'granted'
+      && LS.get('igto_sub_day', '') !== new Date().toISOString().slice(0, 10)) subscribePush().then(paint);
+  bell.onclick = async function(){
+    if (!('Notification' in window) || !('PushManager' in window)) { alert('Notifications are not supported on this device.'); return; }
+    if (Notification.permission === 'denied') { alert('Notifications are blocked. Open your phone Settings > Apps > IGtoDownload (or Chrome) > Notifications and allow them, then tap the bell again.'); return; }
+    var r = await subscribePush(); paint();
+    if (r === 'ok') { ev('notify_accept'); alert('Notifications are on. We only send the important stuff.'); }
+    else if (r === 'denied') ev('notify_decline');
+    else alert('Could not turn on notifications right now. Please try again.');
+  };
+})();
+
+/* ---------- app section above the FAQ ---------- */
+(function(){
+  var go = document.getElementById('appGet'), help = document.getElementById('appHelp'); if (!go) return;
+  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function say(t){ help.textContent = t; help.hidden = false; }
+  go.onclick = async function(){
+    ev('appsec_tap');
+    if (standalone || LS.get('igto_installed', 0)) { say('The app is already installed. Open IGtoDownload from your home screen.'); return; }
+    if (deferred) {
+      deferred.prompt();
+      try { var c = await deferred.userChoice; ev(c && c.outcome === 'accepted' ? 'appsec_accept' : 'appsec_decline'); } catch (e) {}
+      deferred = null; return;
+    }
+    if (inApp && isAndroid) { location.href = 'intent://' + location.host + location.pathname + '#Intent;scheme=https;package=com.android.chrome;end'; return; }
+    if (inApp) { say('Instagram\\'s browser cannot install apps. Tap the \u22EF menu at the top and choose "Open in browser", then tap this button again.'); return; }
+    if (isIOS) { say('On iPhone: tap the Share button (square with an arrow) in Safari, then choose "Add to Home Screen".'); return; }
+    if (isAndroid) { say('Tap the \u22EE menu at the top right of Chrome, then choose "Install app" or "Add to Home screen".'); return; }
+    say('In Chrome or Edge, click the install icon at the right end of the address bar, or open the browser menu and choose "Install IGtoDownload".');
+  };
+})();
 
 /* ---------- hook into the downloader ---------- */
 document.addEventListener('igto:resolved', function(e){

@@ -7,7 +7,7 @@ import { getConfig, saveConfig, getCookies, saveCookies, getStats, AD_SLOTS, nor
 import { testCookie, healthCheck } from "./resolve.js";
 import { siteStatus, statusLine, fullDiagnose, quickCheck } from "./monitor.js";
 import { getVapid, addSub, removeSub, clearSubs, pushAll, getSubs } from "./push.js";
-import { createBroadcast, sendBatch, audience } from "./broadcast.js";
+import { createBroadcast, sendBatch, audience, testOne } from "./broadcast.js";
 import { liveNow, report, resetData } from "./visits.js";
 import { flushAll } from "./store.js";
 import { esc } from "./pages.js";
@@ -256,7 +256,7 @@ export async function handleAdmin(request, url, env, ctx) {
     return new Response(null, { status: 302, headers: { location: "/admin?tab=" + String(form.get("tab") || "home") + "&m=" + encodeURIComponent(msg) } });
   }
 
-  return page(await body(url.searchParams.get("tab") || "monitor", env, url.searchParams.get("m") || "", lang), false);
+  return page(await body(url.searchParams.get("tab") || "monitor", env, url.searchParams.get("m") || "", lang), false, lang);
 }
 
 /* ===================== json api ===================== */
@@ -266,6 +266,7 @@ async function handleApi(api, request, url, env, lang) {
     case "status":
     case "pubstatus": {
       const st = await siteStatus(env);
+      st.liveNow = (await liveNow(env)).now;
       st.line = statusLine(st, (st.alerts && st.alerts.lang) || lang);
       return json(st);
     }
@@ -310,6 +311,11 @@ async function handleApi(api, request, url, env, lang) {
       return json(await sendBatch(env, url.searchParams.get("id")));
     case "live":
       return json(await liveNow(env));
+    case "btest": {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      const b = await request.json().catch(() => ({}));
+      return json(await testOne(env, b.id, lang));
+    }
     case "visitors":
       return json(Object.assign(await report(env, url.searchParams.get("days")), { live: await liveNow(env) }));
     case "reset": {
@@ -543,7 +549,7 @@ async function body(tab, env, msg, lang) {
     <a href="/admin?lang=bn&tab=${tab}" class="${lang === "bn" ? "on" : ""}">বাংলা</a>
     <a href="/admin?lang=en&tab=${tab}" class="${lang === "en" ? "on" : ""}">EN</a>
   </div>
-  <a class="out" href="/admin?logout=1">${t.signout}</a>
+  <a class="out" href="/admin?logout=1" title="${t.signout}" aria-label="${t.signout}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg></a>
 </div>
 <div class="tabs">${order.map((k) => `<a href="/admin?tab=${k}" class="${k === tab ? "on" : ""}">${t.tabs[k]}</a>`).join("")}</div>
 ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
@@ -719,6 +725,9 @@ const U = {
     linkto: "চাপলে কোথায় যাবে", home: "হোম", custom: "অন্য লিংক",
     audience: "কারা পাবে", all: "সবাই", reach: "জন পাবেন", sendTo: "জনকে পাঠান", confirmSend: "জনের কাছে এই নোটিফিকেশন যাবে। পাঠাবেন?",
     nosubs: "এই দেশে এখনো কেউ নোটিফিকেশন নেয়নি।", uploading: "ছবি তোলা হচ্ছে...",
+    devtitle: "নতুন যুক্ত হওয়া ফোন — পরীক্ষা পাঠান",
+    devhint: "নিজের ফোনে নোটিফিকেশন চালু করলে সেটা এখানে সবার উপরে আসবে। \"পরীক্ষা\" চাপলে শুধু ওই ফোনে একটা নোটিফিকেশন যাবে, আর ঠিক কী হলো সেটা সহজ ভাষায় দেখাবে।",
+    devtest: "পরীক্ষা", nodev: "এখনো কোনো ফোন যুক্ত হয়নি। সাইটের অ্যাপে উপরের 🔔 বাটন চাপুন, অথবা একটা ডাউনলোডের পর \"Notify me\" চাপুন।",
     ntitle: "শিরোনাম", nbody: "বার্তা", nurl: "ক্লিক করলে কোথায় যাবে", nimg: "ছবির লিংক (ঐচ্ছিক)",
     ncountry: "দেশ (ঐচ্ছিক) — যেমন BD, IN, PK। খালি রাখলে সবাই পাবে",
     send: "পাঠান", sending: "পাঠানো হচ্ছে...", preview: "যেমন দেখাবে",
@@ -748,6 +757,9 @@ const U = {
     linkto: "Where a tap goes", home: "Home", custom: "Other link",
     audience: "Who receives it", all: "Everyone", reach: "people will receive it", sendTo: "Send to", confirmSend: "people will receive this notification. Send it?",
     nosubs: "Nobody in this country has opted in yet.", uploading: "Uploading picture...",
+    devtitle: "Newest phones — send a test",
+    devhint: "Turn notifications on from your own phone and it appears at the top here. \"Test\" sends one notification to that phone only and tells you, in plain words, what happened.",
+    devtest: "Test", nodev: "No phones yet. In the site app tap the 🔔 button at the top, or tap \"Notify me\" after a download.",
     ntitle: "Title", nbody: "Message", nurl: "Where a tap goes", nimg: "Image link (optional)",
     ncountry: "Countries (optional) — e.g. BD, IN, PK. Empty means everyone",
     send: "Send", sending: "Sending...", preview: "Preview",
@@ -815,6 +827,19 @@ async function usersTab(env, cfg, t, lang) {
   <button class="btn sendbtn" id="nSend" onclick="sendBroadcast()">${T.send}</button>
   <div class="progress hide" id="nProg"><span id="nBar"></span></div>
   <p class="dim" id="nStat"></p>
+</div>
+
+<div class="box">
+  <h3>${T.devtitle}</h3>
+  <p class="dim">${T.devhint}</p>
+  ${a.devices.length
+    ? `<div class="devs">${a.devices
+        .map((x) => `<div class="devrow"><span class="devic">${x.device === "desktop" ? "🖥" : "📱"}</span>
+          <div class="devtx"><b>${esc(x.country || "—")} · ${esc(x.device || "—")}</b><span class="dim">${ago(x.created)}</span></div>
+          <button type="button" class="mini" onclick="testDevice(${+x.id}, this)">${T.devtest}</button></div>
+          <p class="devout" id="dvo${+x.id}"></p>`)
+        .join("")}</div>`
+    : `<p class="dim">${T.nodev}</p>`}
 </div>
 
 <div class="box">
@@ -1328,9 +1353,9 @@ function loginForm(err, t, lang) {
 </div>`;
 }
 
-function page(inner, bare) {
+function page(inner, bare, lang) {
   return new Response(
-    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    `<!DOCTYPE html><html lang="${lang === "en" ? "en" : "bn"}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow,noarchive">
 <meta name="theme-color" content="#0b0b11">
@@ -1392,7 +1417,7 @@ const ACSS = `
 body{background:#0b0b11;color:#ececf1;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Bengali",Arial,sans-serif;padding:16px 14px 60px}
 body.bare{display:grid;place-items:center;min-height:100vh;padding:20px}
 .wrap{max-width:880px;margin:0 auto;width:100%}
-.top{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.top{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:nowrap}
 .logo{font-weight:800;font-size:17px;display:flex;align-items:center;gap:9px}
 .logo em{font-style:normal;color:#8c8c9b;font-weight:600;font-size:13px}
 .mk{width:24px;height:24px;border-radius:7px;background:linear-gradient(100deg,#ff8a3d,#f9377d 48%,#8a3ffc)}
@@ -1400,15 +1425,20 @@ body.bare{display:grid;place-items:center;min-height:100vh;padding:20px}
 .lang a{padding:5px 11px;border-radius:7px;color:#8c8c9b;text-decoration:none;font-size:12.5px;font-weight:600}
 .lang a.on{background:#262630;color:#fff}
 .mid-lang{margin:16px auto 0;width:fit-content}
-.out{color:#8c8c9b;text-decoration:none;font-size:13px;border:1px solid #26262f;padding:7px 12px;border-radius:9px}
-.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px}
-@media(min-width:720px){.tabs{grid-template-columns:repeat(9,auto);justify-content:start}}
-.tabs a{display:flex;align-items:center;justify-content:center;text-align:center;min-height:38px;padding:7px 8px;border-radius:11px;
-  background:#15151d;border:1px solid #23232c;color:#9a9aa8;text-decoration:none;font-size:13px;font-weight:600;line-height:1.25;
+.out{color:#8c8c9b;text-decoration:none;border:1px solid #26262f;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none}
+@media(max-width:380px){.logo em{display:none}}
+.logo{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tabs{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;
+  margin:0 -14px 14px;padding:8px 14px;position:sticky;top:0;z-index:30;
+  background:rgba(11,11,17,.86);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  scroll-snap-type:x proximity;scroll-padding:0 14px;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
+  scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 22px),transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 22px),transparent 100%)}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{flex:none;scroll-snap-align:start;white-space:nowrap;display:flex;align-items:center;min-height:38px;padding:8px 15px;border-radius:11px;
+  background:#15151d;border:1px solid #23232c;color:#9a9aa8;text-decoration:none;font-size:13.5px;font-weight:600;
   -webkit-tap-highlight-color:transparent;transition:transform .15s ease}
 .tabs a:active{transform:scale(.96)}
-table.wide{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
-.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;margin:0 -2px;padding:0 2px}
 .tabs a.on{background:linear-gradient(100deg,#ff8a3d,#f9377d 48%,#8a3ffc);color:#fff;border-color:transparent}
 .msg{background:rgba(43,217,124,.1);border:1px solid rgba(43,217,124,.35);padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}
 .alert{padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}
@@ -1460,6 +1490,12 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 .slothead select{width:auto;padding:6px 9px;font-size:12.5px;margin-left:auto}
 .out{background:#0d0d13;border:1px solid #26262f;border-radius:10px;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;margin-top:12px;max-height:340px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}
 .hide{display:none}
+.devs{display:grid;gap:6px}
+.devrow{display:flex;align-items:center;gap:10px;background:#0f0f16;border:1px solid #1e1e27;border-radius:12px;padding:9px 11px}
+.devic{width:30px;height:30px;border-radius:9px;background:#1b1b24;display:grid;place-items:center;font-size:15px;flex:none}
+.devtx{flex:1;min-width:0}.devtx b{display:block;font-size:13.5px}.devtx .dim{font-size:12px;margin:0}
+.devout{font-size:12.5px;margin:2px 4px 6px;line-height:1.5}
+.devout.good{color:#2bd97c}.devout.bad{color:#ff7fa5}
 #nBody{font-family:inherit;font-size:14px;line-height:1.55}
 .pvhint{font-size:12px;color:#8c8c9b;margin:4px 0 8px}
 .anotif{background:#1d1d27;border-radius:22px;padding:13px 15px;cursor:pointer;-webkit-tap-highlight-color:transparent;
@@ -1546,7 +1582,8 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 @keyframes beat{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.6}}
 .ring.down{animation:halo 1.6s ease-out infinite}
 @keyframes halo{0%{box-shadow:0 0 0 0 rgba(255,92,138,.35)}100%{box-shadow:0 0 0 16px rgba(255,92,138,0)}}
-.minis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.minis{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px}
+.mini-c .ldot2,.ldot2{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2bd97c;margin-right:6px;vertical-align:2px;animation:ldot 1.8s ease-out infinite}
 .mini-c{background:#0f0f16;border:1px solid #23232c;border-radius:12px;padding:10px;text-align:center}
 .mini-c span{display:block;color:#8c8c9b;font-size:11px}
 .mini-c b{font-size:17px}
@@ -1592,6 +1629,7 @@ function pattern(){
   return p;
 }
 var APP = window.IGtoApp || null;
+var BN = !/(?:^|; )iglang=en/.test(document.cookie);
 function buzz(){
   var p=pattern();
   if(!p) return false;
@@ -1608,7 +1646,17 @@ function testVib(){
     AL.vibrateGapMs=parseInt(form.vibrateGapMs.value)||400;
     AL.vibrate=form.vibrate.checked;
   }
-  if(APP){ var p=pattern(); APP.testAlert(p?p.join(','):''); return; }
+  if(APP){
+    var p=pattern(); var r=APP.testAlert(p?p.join(','):'');
+    if(r && r!=='ok'){
+      var bn2=BN;
+      alert(r==='channel_off'
+        ? (bn2?'এই অ্যাপের "Urgent alerts" নোটিফিকেশন ফোনের সেটিংসে বন্ধ করা আছে। ঠিক আছে চাপলে সেটিংস খুলবে — ওটা চালু করে দিন।':'The app\\'s "Urgent alerts" notifications are switched off in phone settings. Press OK to open settings and turn them on.')
+        : (bn2?'এই অ্যাপের নোটিফিকেশন বন্ধ আছে, তাই কিছু আসছে না। ঠিক আছে চাপলে চালু করার জায়গায় নিয়ে যাবে।':'Notifications are off for this app, so nothing can arrive. Press OK to turn them on.'));
+      if(APP.fixNotifications) APP.fixNotifications();
+    }
+    return;
+  }
   if(!buzz()) alert('This phone or browser does not support vibration (iPhone does not).');
 }
 
@@ -1635,9 +1683,10 @@ function paint(st){
   el('age').textContent=new Date(st.at).toLocaleTimeString();
   var c=st.cookies;
   el('minis').innerHTML=
-    mini('Cookies',(c.live+c.warn)+' / '+c.total)+
-    mini('Today',st.stats.today)+
-    mini('Success',st.stats.rate+'%');
+    mini(BN?'এখন সাইটে':'On site now','<i class="ldot2"></i>'+(st.liveNow||0))+
+    mini(BN?'কুকি':'Cookies',(c.live+c.warn)+' / '+c.total)+
+    mini(BN?'আজ ডাউনলোড':'Downloads today',st.stats.today)+
+    mini(BN?'সফলতা':'Success',st.stats.rate+'%');
   var L=el('layers');
   if(L) L.innerHTML=
     layer(1,'Cookie pool',(c.live+c.warn)+' usable',(c.live+c.warn)>0)+
@@ -1819,6 +1868,20 @@ function reach(){
   reach(); pv();
 })();
 
+async function testDevice(id, btn){
+  var out=el('dvo'+id); btn.disabled=true; out.textContent='...';
+  try{
+    var r=await (await fetch('/admin?api=btest',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:id})})).json();
+    out.className='devout '+(r.ok?'good':'bad');
+    out.textContent=(r.ok?'\u2713 ':'\u2715 ')+r.text+(r.status?' ('+r.status+')':'');
+  }catch(e){ out.textContent='Request failed.'; }
+  btn.disabled=false;
+}
+function codeLine(codes){
+  if(!codes) return '';
+  return ' \u00b7 '+Object.keys(codes).map(function(k){return (k==='0'?'net':k)+'\u00d7'+codes[k]}).join(' ');
+}
+
 async function sendBroadcast(){
   var body={title:el('nTitle').value.trim(),body:el('nBody').value.trim(),url:el('nUrl').value.trim()||'/',image:el('nImg').value.trim(),countries:el('nCountry').value};
   if(!body.title||!body.body){ alert((UU.ntitle||'Title')+' + '+(UU.nbody||'Message')); el(!body.title?'nTitle':'nBody').focus(); return; }
@@ -1854,14 +1917,19 @@ function appPanel(){
              :{bg:'Background check',every:'every 15 minutes',last:'Last check',never:'not yet',bat:'Battery',free:'Unrestricted ✓',limited:'Restricted — tap',lock:'Fingerprint lock',on:'On',off:'Off',now:'Check now',ver:'App'};
   var last=APP.lastCheck(); var mins=last?Math.round((Date.now()-last)/60000):-1;
   var free=APP.batteryFree(); var lock=APP.lockEnabled();
+  var ns=APP.notifState?APP.notifState():'on';
+  var nOn=ns==='on';
+  var nTxt=nOn?(bn?'চালু ✓':'On ✓'):(ns==='channel_off'?(bn?'জরুরি অ্যালার্ট বন্ধ — চাপুন':'Urgent alerts muted — tap'):(bn?'বন্ধ — চাপুন':'Off — tap'));
   box.innerHTML=
     '<div class="layers" style="margin-top:6px">'+
+    '<div class="layer" id="notRow" style="cursor:pointer"><span class="num">\u{1F514}</span><span>'+(bn?'নোটিফিকেশন':'Notifications')+'</span><span class="pill '+(nOn?'on':'off')+'">'+nTxt+'</span></div>'+
     layer('\u23F1',T.bg,T.every,true)+
     layer('\u2713',T.last,mins<0?T.never:(mins+(bn?' মিনিট আগে':' min ago')),mins>=0&&mins<40)+
     '<div class="layer" id="batRow" style="cursor:pointer"><span class="num">\u26A1</span><span>'+T.bat+'</span><span class="pill '+(free?'on':'off')+'">'+(free?T.free:T.limited)+'</span></div>'+
     '<div class="layer" id="lockRow" style="cursor:pointer"><span class="num">\u{1F512}</span><span>'+T.lock+'</span><span class="pill '+(lock?'on':'off')+'">'+(lock?T.on:T.off)+'</span></div>'+
     '</div><p class="dim" style="margin-top:10px">'+T.ver+' '+APP.version()+'</p>';
   el('batRow').onclick=function(){APP.batterySettings()};
+  el('notRow').onclick=function(){ if(APP.fixNotifications) APP.fixNotifications(); };
   el('lockRow').onclick=function(){APP.setLock(!APP.lockEnabled());appPanel()};
   var b=el('btnNotif'); if(b){ b.textContent=free?T.now:(bn?'ব্যাকগ্রাউন্ডে চলতে দিন':'Allow background running'); b.onclick=free?function(){APP.checkNow();setTimeout(appPanel,4000)}:function(){APP.batterySettings()}; }
   var tp=document.querySelector('button[onclick="testPush()"]'); if(tp) tp.style.display='none';
@@ -1955,6 +2023,12 @@ async function doReset(){
     setTimeout(function(){ location.href='/admin?tab=monitor'; },900);
   }catch(e){ el('rOut').textContent='Failed.'; el('rBtn').disabled=false; }
 }
+
+/* ---------- tab bar: keep the open tab in view ---------- */
+(function(){
+  var bar=document.querySelector('.tabs'), on=bar&&bar.querySelector('a.on'); if(!on) return;
+  bar.scrollLeft=Math.max(0,on.offsetLeft-(bar.clientWidth-on.clientWidth)/2);
+})();
 
 /* ---------- boot ---------- */
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/admin'}).catch(function(){}); }

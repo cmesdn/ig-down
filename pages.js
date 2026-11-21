@@ -300,6 +300,7 @@ ${adSlot(cfg, "sticky_top")}
   <nav class="links">
     <a href="/reels">Reels</a><a href="/video">Video</a><a href="/photo">Photo</a><a href="/story">Story</a><a href="/blog">Blog</a>
   </nav>
+  <button class="histbtn bellbtn" id="bellbtn" aria-label="Notifications" title="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button>
   <button class="histbtn" id="histbtn" aria-label="Recent downloads" title="Recent downloads">${I.hist}</button>
   <button class="themebtn" id="themebtn" aria-label="Toggle theme">${I.moon}</button>
 </header>
@@ -362,6 +363,19 @@ ${adSlot(cfg, "in_content")}
     <div class="feat"><h3>Works everywhere</h3><p>Android, iPhone, Windows, Mac, tablets. Any browser, nothing to install.</p></div>
     <div class="feat"><h3>Fast everywhere</h3><p>Runs on a global edge network, so requests are handled close to where you are.</p></div>
     <div class="feat"><h3>Nothing stored</h3><p>Files stream through to your device. We never keep a copy of what you download.</p></div>
+  </div>
+</section>
+<section class="appsec" id="appsec">
+  <img src="/og.jpg" width="1200" height="630" loading="lazy" decoding="async" alt="IGtoDownload app on a phone">
+  <div class="aps-tx">
+    <h2>Get the free IGtoDownload app</h2>
+    <ul>
+      <li>Share any reel from Instagram straight to the app</li>
+      <li>Opens instantly from your home screen, full screen</li>
+      <li>Tiny install, no account, no Play Store needed</li>
+    </ul>
+    <button type="button" class="aps-go" id="appGet"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>Install the app</span></button>
+    <p class="aps-help" id="appHelp" hidden></p>
   </div>
 </section>
 <section class="faq">

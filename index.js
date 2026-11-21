@@ -52,7 +52,7 @@ export default {
       }
       if (path === "/api/push/subscribe" && request.method === "POST") {
         const body = await request.json().catch(() => null);
-        return cors(json(await subscribeUser(env, body, request.headers.get("CF-IPCountry") || "")));
+        return cors(json(await subscribeUser(env, body, request.headers.get("CF-IPCountry") || "", request.headers.get("user-agent") || "")));
       }
       if (path === "/api/push/unsubscribe" && request.method === "POST") {
         const body = await request.json().catch(() => ({}));
