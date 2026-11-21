@@ -10,6 +10,7 @@ import { md, listPosts, getPost, savePost, deletePost, getPage, savePage, resetP
 import { getConfig, saveConfig, notify } from "./store.js";
 import { pushAll } from "./push.js";
 import { TOOLS, esc } from "./pages.js";
+import { pingIndexNow } from "./indexnow.js";
 
 /* ===================== contact messages (D1) ===================== */
 
@@ -107,8 +108,11 @@ export async function cmsApi(api, request, url, env, lang) {
   const bn = lang !== "en";
   const body = async () => (request.method === "POST" ? await request.json().catch(() => ({})) : {});
   switch (api) {
-    case "cms_posts":
-      return j({ posts: await listPosts(env, true) });
+    case "cms_posts": {
+      let last = null;
+      try { last = JSON.parse((await env.CONFIG.get("indexnow_last")) || "null"); } catch (_) {}
+      return j({ posts: await listPosts(env, true), indexnow: last });
+    }
     case "cms_post": {
       const p = await getPost(env, url.searchParams.get("slug") || "", true);
       return p ? j({ post: p }) : j({ error: "not found" }, 404);
@@ -117,7 +121,8 @@ export async function cmsApi(api, request, url, env, lang) {
       const b = await body();
       try {
         const p = await savePost(env, b.post || {}, b.orig || "");
-        return j({ ok: true, post: p });
+        const idx = p.status === "published" ? await pingIndexNow(env, ["/blog/" + p.slug, "/blog"]) : null;
+        return j({ ok: true, post: p, indexnow: idx });
       } catch (e) {
         const why = String(e.message);
         const m = why === "exists" ? (bn ? "এই URL-এ আগেই একটা পোস্ট আছে। URL বদলান।" : "A post already uses this URL. Change the URL.")
@@ -143,7 +148,8 @@ export async function cmsApi(api, request, url, env, lang) {
       if (!PAGE_KEYS.includes(b.key)) return j({ error: "page" }, 400);
       if (b.reset) await resetPage(env, b.key);
       else await savePage(env, b.key, b);
-      return j({ ok: true, page: await getPage(env, b.key) });
+      const idx = await pingIndexNow(env, ["/" + b.key]);
+      return j({ ok: true, page: await getPage(env, b.key), indexnow: idx });
     }
     case "cms_tools": {
       const ov = await getToolText(env);
@@ -158,7 +164,8 @@ export async function cmsApi(api, request, url, env, lang) {
       const b = await body();
       if (!Object.values(TOOLS).some((t) => t.slug === b.slug)) return j({ error: "tool" }, 400);
       await saveToolText(env, b.slug, b.reset ? null : b);
-      return j({ ok: true });
+      const idx = await pingIndexNow(env, ["/" + b.slug]);
+      return j({ ok: true, indexnow: idx });
     }
     case "msg_list": {
       await init(env);
@@ -229,6 +236,9 @@ const S = {
     msgHint: "সাইটের Contact ফর্ম থেকে আসা সব মেসেজ এখানে জমা হয়। নতুন মেসেজ এলে অ্যাপে নোটিফিকেশন যায়।",
     toolbar: { h2: "H2", h3: "H3", b: "B", i: "I", ul: "• লিস্ট", ol: "1. লিস্ট", q: "❝", a: "🔗 লিংক", img: "🖼 ছবি", hr: "—" },
     linkAsk: "লিংক দিন (যেমন /reels বা https://...)", linkText: "লিংকের লেখা",
+    inOk: "Bing ও Yandex-কে জানানো হয়েছে ✓", inBad: "Bing/Yandex-কে জানানো যায়নি (পরে আবার চেষ্টা হবে)",
+    inLast: "শেষবার Bing/Yandex-কে জানানো:", inNever: "এখনো কিছু পাবলিশ করে জানানো হয়নি",
+    drafts: "সাপ্তাহিক ড্রাফট পড়ে পাবলিশ করুন", 
   },
   en: {
     posts: "Posts", pages: "Pages", tools: "Tool pages",
@@ -259,6 +269,9 @@ const S = {
     msgHint: "Everything sent through the site's Contact form lands here. You get a notification in the app for new messages.",
     toolbar: { h2: "H2", h3: "H3", b: "B", i: "I", ul: "• List", ol: "1. List", q: "❝", a: "🔗 Link", img: "🖼 Picture", hr: "—" },
     linkAsk: "Link (e.g. /reels or https://...)", linkText: "Link text",
+    inOk: "Bing & Yandex notified ✓", inBad: "Could not notify Bing/Yandex",
+    inLast: "Last Bing/Yandex ping:", inNever: "Nothing published and pinged yet",
+    drafts: "Review the weekly drafts and publish them", 
   },
 };
 
@@ -384,7 +397,10 @@ function showList(){
   view.innerHTML='<div class="box dim">'+S.loading+'</div>';
   api('cms_posts').then(function(d){
     var ps=d.posts||[];
+    var nd=ps.filter(function(x){return x.status==='draft'}).length, il=d.indexnow;
     view.innerHTML='<div class="box"><div class="row" style="justify-content:space-between"><button class="btn" id="newPost">'+S.newpost+'</button><span class="dim">'+ps.length+'</span></div>'+
+      (nd?'<p style="margin:10px 0 0;color:#ffb800;font-size:13.5px">✎ '+nd+' — '+S.drafts+'</p>':'')+
+      '<p class="dim" style="margin:8px 0 0;font-size:12.5px">'+S.inLast+' '+(il?(il.ok?'✓ ':'⚠ ')+new Date(il.at).toLocaleString()+' ('+il.status+')':S.inNever)+'</p>'+
       '<details class="guide" style="margin-top:10px"><summary>'+S.howto+'</summary><div class="gbody">'+S.howtoBody+'</div></details></div>'+
       '<div class="plist">'+ps.map(function(p){
         return '<div class="pitem"><div class="th" style="'+(p.cover?'background-image:url('+h(p.cover)+')':'')+'">'+(p.cover?'':'✎')+'</div>'+
@@ -470,7 +486,7 @@ function editor(p){
     api('cms_save',{post:post,orig:isNew?'':p.slug}).then(function(r){
       if(r.error){out.style.color='#ff7aa5';out.textContent=r.error;return}
       dirty=false;isNew=false;p=r.post;SL.value=p.slug;slugTouched=true;out.style.color='#2bd97c';
-      out.innerHTML=status==='published'?S.savedLive+' <a href="/blog/'+h(p.slug)+'" target="_blank" style="color:#f9377d">'+S.view+' ↗</a>':S.saved;
+      out.innerHTML=status==='published'?S.savedLive+' <a href="/blog/'+h(p.slug)+'" target="_blank" style="color:#f9377d">'+S.view+' ↗</a>'+(r.indexnow?'<br><span style="color:'+(r.indexnow.ok?'#2bd97c':'#ffb800')+'">'+(r.indexnow.ok?S.inOk:S.inBad)+'</span>':''):S.saved;
       $('ePub').textContent=status==='published'?S.update:S.publish;
     }).catch(function(){out.style.color='#ff7aa5';out.textContent='Network error'});
   }

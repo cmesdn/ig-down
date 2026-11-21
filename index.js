@@ -8,6 +8,7 @@ import { resolveMedia, handleDownload, handleStream, handleImage, healthCheck, s
 import { handleAdmin } from "./admin.js";
 import { route, render, sitemap, robots, esc } from "./pages.js";
 import { handleContact } from "./cms.js";
+import { serveKeyFile, handleDrafts } from "./indexnow.js";
 import { ogImage, appIcon, icon192, icon512, iconMaskable } from "./assets.js";
 import { manifest, SW } from "./pwa.js";
 import { siteStatus } from "./monitor.js";
@@ -120,6 +121,12 @@ export default {
       // --- machine files
       if (path === "/sitemap.xml")
         return new Response(await sitemap(origin, env), { headers: { "content-type": "application/xml", "cache-control": "public, max-age=3600" } });
+      if (path.endsWith(".txt") && path !== "/robots.txt") {
+        const kf = await serveKeyFile(path, env);
+        if (kf) return kf;
+      }
+      if (path === "/api/drafts") return await handleDrafts(request, env);
+
       // Google Search Console ownership file (only this exact token — never a pattern)
       if (path === "/google844f16a261948d1a.html")
         return new Response("google-site-verification: google844f16a261948d1a.html", { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" } });

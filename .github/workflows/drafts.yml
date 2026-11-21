@@ -1,0 +1,35 @@
+name: Send draft posts to the site
+
+on:
+  push:
+    branches: [main]
+    paths: ["drafts/**.md"]
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "Draft files to send (space separated, e.g. drafts/2026-11-29/*.md)"
+        required: true
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Send only the drafts added or changed in this push
+        env:
+          DRAFT_KEY: ${{ secrets.DRAFT_KEY }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FILES=$(ls ${{ github.event.inputs.files }} 2>/dev/null || true)
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then BEFORE="${{ github.sha }}~1"; fi
+            FILES=$(git diff --name-only --diff-filter=AM "$BEFORE" "${{ github.sha }}" -- 'drafts/' | grep '\.md$' || true)
+          fi
+          echo "Files:"; echo "$FILES"
+          node scripts/upload-drafts.mjs $FILES
