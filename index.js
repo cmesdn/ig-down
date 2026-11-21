@@ -10,7 +10,10 @@ import { route, render, sitemap, robots, esc } from "./pages.js";
 import { ogImage, appIcon, icon192, icon512, iconMaskable } from "./assets.js";
 import { manifest, SW } from "./pwa.js";
 import { siteStatus } from "./monitor.js";
-import { pushIfChanged } from "./push.js";
+import { pushIfChanged, getVapid } from "./push.js";
+import { siteManifest, SITE_SW, handleShare } from "./app.js";
+import { subscribeUser, unsubscribeUser, latestBroadcast, countClick } from "./broadcast.js";
+import { logEvent } from "./store.js";
 
 const HITS = new Map(); // in-isolate rate limit: ip -> {n, reset}
 
@@ -23,6 +26,48 @@ export default {
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
     try {
+      // --- public installable app
+      if (path === "/manifest.webmanifest") {
+        const cfg = await getConfig(env);
+        return new Response(siteManifest(cfg, origin), {
+          headers: { "content-type": "application/manifest+json", "cache-control": "public, max-age=3600" },
+        });
+      }
+      if (path === "/app-sw.js") {
+        return new Response(SITE_SW, {
+          headers: { "content-type": "application/javascript; charset=utf-8", "service-worker-allowed": "/", "cache-control": "no-cache" },
+        });
+      }
+      if (path === "/share") return handleShare(url, origin);
+
+      // --- public app api
+      if (path === "/api/broadcast") {
+        const b = await latestBroadcast(env);
+        return cors(json(b || {}));
+      }
+      if (path === "/api/push/key") {
+        const v = await getVapid(env);
+        return cors(json({ key: v.publicKey }));
+      }
+      if (path === "/api/push/subscribe" && request.method === "POST") {
+        const body = await request.json().catch(() => null);
+        return cors(json(await subscribeUser(env, body, request.headers.get("CF-IPCountry") || "")));
+      }
+      if (path === "/api/push/unsubscribe" && request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        return cors(json(await unsubscribeUser(env, body && body.endpoint)));
+      }
+      if (path === "/api/event" && request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const k = String((body && body.k) || "");
+        const KEEP = ["install", "app_open", "share_in", "push_click", "banner_shown", "banner_accept", "notify_accept"];
+        if (KEEP.includes(k)) {
+          if (k === "push_click") ctx.waitUntil(countClick(env, body.id));
+          ctx.waitUntil(logEvent(env, { kind: k, ok: true, country: request.headers.get("CF-IPCountry") || "" }));
+        }
+        return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*" } });
+      }
+
       // --- app shell for the admin PWA (must come before the admin handler)
       if (path === "/admin/manifest.webmanifest") {
         const cfg = await getConfig(env);

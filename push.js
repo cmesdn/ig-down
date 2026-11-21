@@ -38,6 +38,28 @@ async function jwt(audience, vapid, subject) {
   return data + "." + b64u(new Uint8Array(sig));
 }
 
+/** One payload-free push to one endpoint. Returns "ok" | "gone" | "fail". */
+export async function sendTickle(endpoint, vapid, subject, ttl) {
+  try {
+    const u = new URL(endpoint);
+    const token = await jwt(u.origin, vapid, subject);
+    const r = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        TTL: String(ttl || 86400),
+        Urgency: "normal",
+        "Content-Length": "0",
+        Authorization: "vapid t=" + token + ", k=" + vapid.publicKey,
+      },
+    });
+    if (r.status === 404 || r.status === 410) return "gone";
+    if (r.ok || r.status === 201 || r.status === 202) return "ok";
+    return "fail";
+  } catch (_) {
+    return "fail";
+  }
+}
+
 /* ===================== subscriptions ===================== */
 
 export async function getSubs(env) {

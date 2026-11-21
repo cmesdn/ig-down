@@ -4,6 +4,7 @@
  */
 
 import { getConfig, AD_SLOTS } from "./store.js";
+import { APP_HEAD, SPLASH, APP_CSS, APP_JS } from "./app.js";
 
 /* ===================== content ===================== */
 
@@ -113,9 +114,11 @@ const LEGAL = {
     title: "Privacy Policy",
     desc: "How IGtoDownload handles your data: what we collect, what we do not, cookies, analytics and advertising.",
     body: [
-      ["What we collect", "We do not ask for an account, an email address or any Instagram credentials. The link you paste is used to fetch the media and is not tied to you. We keep aggregate counts — how many requests succeeded, which country they came from — so we can tell whether the service is working. Those counts contain no personal identifiers."],
+      ["What we collect", "We do not ask for an account, an email address or any Instagram credentials. The link you paste is used to fetch the media and is not tied to you. We keep aggregate counts — how many requests succeeded, how many times the app was installed or opened, and which country a request came from — so we can tell whether the service is working. Country is worked out from the network connection; we never request your device location. Those counts contain no personal identifiers."],
       ["Files and storage", "Downloaded media is never written to our servers. When you press download, the file streams from Instagram's content servers through this site to your device, and nothing is retained afterwards."],
-      ["Cookies", "The site stores one small preference locally: whether you chose the dark or light theme. That value stays in your browser and is never sent to us."],
+      ["Data kept on your device", "A few small values are stored in your own browser so the site works the way you left it: your light or dark theme, a list of your recent downloads (so you can find them again), and whether you closed the install banner. This stays on your device and is never sent to us. Clearing your browser data, or tapping Clear in the recent downloads list, removes it."],
+      ["Notifications", "If you choose to turn on notifications, your browser gives us an anonymous delivery address. We store it with your country so we can send occasional, relevant updates. It does not identify you. You can turn notifications off at any time in your browser or phone settings, and the address is deleted from our list the next time a message cannot be delivered to it."],
+      ["The installed app", "Installing the app adds a shortcut that opens this site full screen. It uses the same site and the same rules described here. When you share a reel to the app, only the shared link is read; nothing else on your device is accessed. If you have allowed clipboard access, the app may read a copied Instagram link when you open it, to save you a step — nothing else is read, and nothing is sent anywhere except the link you choose to download."],
       ["Analytics", "We may use Google Analytics to understand which pages people find useful. Google processes this data under its own privacy policy. You can block it with any standard browser setting or extension."],
       ["Advertising", "Pages may display ads from third-party networks. Those networks may use cookies to show relevant ads. You can manage ad personalisation through your Google account settings or your browser."],
       ["Third parties", "Media is fetched from Instagram, which is operated by Meta. Your use of their content remains subject to their terms."],
@@ -280,19 +283,24 @@ ${gsc}
 <meta name="apple-mobile-web-app-title" content="${esc(brand)}">
 <link rel="icon" type="image/svg+xml" href="${FAVICON}">
 <link rel="apple-touch-icon" href="${origin}/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+${APP_HEAD}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-<style>${CSS}</style>
+<style>${CSS}${APP_CSS}</style>
 ${ga}${adsense}
 </head>
 <body>
+${SPLASH}
 ${adSlot(cfg, "sticky_top")}
 <header class="nav">
   <a class="brand" href="/">${I.mark}<span><b>IGto</b>Download</span></a>
   <nav class="links">
     <a href="/reels">Reels</a><a href="/video">Video</a><a href="/photo">Photo</a><a href="/story">Story</a><a href="/blog">Blog</a>
   </nav>
+  <button class="histbtn" id="histbtn" aria-label="Recent downloads" title="Recent downloads">${I.hist}</button>
   <button class="themebtn" id="themebtn" aria-label="Toggle theme">${I.moon}</button>
 </header>
 ${adSlot(cfg, "header")}
@@ -308,6 +316,8 @@ ${adSlot(cfg, "footer")}
 </footer>
 ${adSlot(cfg, "sticky_bottom", "sticky-bottom")}
 <script>${JS}</script>
+<script>window.__APP=${appConfig(cfg)};</script>
+<script>${APP_JS}</script>
 </body></html>`;
 }
 
@@ -424,6 +434,26 @@ function schema(t) {
   return [faq, app, how].map((s) => `<script type="application/ld+json">${JSON.stringify(s)}</script>`).join("");
 }
 
+/* ===================== app config for the client ===================== */
+
+function appConfig(cfg) {
+  const a = cfg.app || {};
+  const b = a.banner || {};
+  const p = a.push || {};
+  const out = {
+    banner: {
+      enabled: !!b.enabled, title: b.title || "", sub: b.sub || "", button: b.button || "",
+      escTitle: b.escTitle || "", escSub: b.escSub || "", escButton: b.escButton || "",
+      delaySec: b.delaySec || 4, snoozeDays: b.snoozeDays || 5,
+    },
+    push: { enabled: !!p.enabled, after: p.after || 1, title: p.title || "", sub: p.sub || "", button: p.button || "" },
+    icPhoto: I.photo,
+    icPlay: I.playo,
+  };
+  // inline <script> safety: no closing tags or line separators can break out
+  return JSON.stringify(out).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+}
+
 /* ===================== ads ===================== */
 
 function adSlot(cfg, id, cls = "", wrapCls = "") {
@@ -458,6 +488,7 @@ Disallow: /api/
 Disallow: /dl
 Disallow: /stream
 Disallow: /img
+Disallow: /share
 
 Sitemap: ${origin}/sitemap.xml`;
 }
@@ -490,6 +521,8 @@ const I = {
   comment: sv('<path d="M20 12a7.5 7.5 0 0 1-10.9 6.7L4.5 20l1.3-4.4A7.5 7.5 0 1 1 20 12Z"/>'),
   eye: sv('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>'),
   clock: sv('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  hist: sv('<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4.5v4h4"/><path d="M12 8v4.2l2.8 1.8"/>'),
+  playo: sv('<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M10.2 9.4v5.2l4.4-2.6z" fill="currentColor" stroke="none"/>'),
   photo: sv('<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l4.5-4.2a2 2 0 0 1 2.7 0L20 19.5"/>'),
 };
 
@@ -678,6 +711,7 @@ f.onsubmit=function(e){
   .then(function(d){
     if(!d.ok){out.innerHTML='<div class="err"><b>'+esc(d.title||'Could not get that one')+'</b>'+esc(d.error||'')+'</div>';return}
     draw(d);
+    try{document.dispatchEvent(new CustomEvent('igto:resolved',{detail:d}))}catch(x){}
     if(window.gtag)gtag('event','download_resolved',{method:d.via});
   })
   .catch(function(){out.innerHTML='<div class="err"><b>Network problem</b>Check your connection and try again.</div>'})

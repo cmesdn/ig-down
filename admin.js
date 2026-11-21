@@ -7,6 +7,7 @@ import { getConfig, saveConfig, getCookies, saveCookies, getStats, AD_SLOTS, nor
 import { testCookie, healthCheck } from "./resolve.js";
 import { siteStatus, statusLine, fullDiagnose, quickCheck } from "./monitor.js";
 import { getVapid, addSub, removeSub, clearSubs, pushAll, getSubs } from "./push.js";
+import { createBroadcast, sendBatch, audience } from "./broadcast.js";
 import { esc } from "./pages.js";
 
 const SESSION_HOURS = 24;
@@ -19,7 +20,7 @@ const L = {
     admin: "এডমিন", signout: "সাইন আউট", signin: "সাইন ইন", password: "পাসওয়ার্ড",
     wrongpw: "ভুল পাসওয়ার্ড।", toomany: "অনেকবার ভুল হয়েছে। কয়েক মিনিট পর আবার চেষ্টা করুন।",
     guide: "📖 গাইড দেখুন", save: "সেভ করুন",
-    tabs: { monitor: "লাইভ", home: "ড্যাশবোর্ড", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
+    tabs: { monitor: "লাইভ", home: "ড্যাশবোর্ড", users: "ইউজার ও অ্যাপ", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
 
     a_nocookie: "এখনো কোনো সেশন কুকি নেই। কুকি ট্যাবে গিয়ে একটা যোগ করুন, নইলে কোনো ডাউনলোড হবে না।",
     a_alldead: "সব কুকি মৃত। সাইট এখন কিছুই ডাউনলোড করতে পারছে না। কুকি ট্যাবে নতুন sessionid যোগ করুন।",
@@ -106,7 +107,7 @@ const L = {
     admin: "admin", signout: "Sign out", signin: "Sign in", password: "Password",
     wrongpw: "Wrong password.", toomany: "Too many attempts. Try again in a few minutes.",
     guide: "📖 Show guide", save: "Save",
-    tabs: { monitor: "Live", home: "Dashboard", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
+    tabs: { monitor: "Live", home: "Dashboard", users: "Users & app", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
 
     a_nocookie: "No session cookies yet. Downloads will fail until you add one in the Cookies tab.",
     a_alldead: "Every cookie is dead. The site cannot download anything right now. Add a fresh sessionid in the Cookies tab.",
@@ -230,9 +231,11 @@ export async function handleAdmin(request, url, env, ctx) {
     const form = await request.formData();
     if (await checkPassword(String(form.get("pw") || ""), env)) {
       TRIES.delete(ip);
+      // the admin app is fingerprint-locked on the phone, so it can stay signed in for 90 days
+      const hours = /IGtoAdminApp/.test(request.headers.get("user-agent") || "") ? 24 * 90 : SESSION_HOURS;
       return new Response(null, {
         status: 302,
-        headers: { location: "/admin", "set-cookie": `igadm=${await mkSession(env)}; Path=/admin; Max-Age=${SESSION_HOURS * 3600}; HttpOnly; Secure; SameSite=Lax` },
+        headers: { location: "/admin", "set-cookie": `igadm=${await mkSession(env, hours)}; Path=/admin; Max-Age=${hours * 3600}; HttpOnly; Secure; SameSite=Lax` },
       });
     }
     const n = ((tr && tr.n) || 0) + 1;
@@ -291,6 +294,18 @@ async function handleApi(api, request, url, env, lang) {
       const subs = await getSubs(env);
       return json(Object.assign({ devices: subs.length }, r));
     }
+    case "bcreate": {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      const b = await request.json().catch(() => null);
+      if (!b || !String(b.title || "").trim() || !String(b.body || "").trim())
+        return json({ error: lang === "bn" ? "শিরোনাম আর বার্তা দুটোই লিখুন।" : "Write both a title and a message." }, 400);
+      return json(await createBroadcast(env, {
+        title: String(b.title).trim(), body: String(b.body).trim(),
+        url: String(b.url || "/").trim() || "/", image: String(b.image || "").trim(), countries: String(b.countries || ""),
+      }));
+    }
+    case "bsend":
+      return json(await sendBatch(env, url.searchParams.get("id")));
     default:
       return json({ error: "unknown api" }, 404);
   }
@@ -314,6 +329,7 @@ const M = {
     revive: "সব কুকি আবার চালু। কোনটা সত্যিই কাজ করে দেখতে হেলথ চেক চালান।",
     cache: "ক্যাশ পরিষ্কার হয়েছে। পরের বার প্রতিটা লিংক নতুন করে আনা হবে।",
     alerts: "অ্যালার্ট সেটিংস সেভ হয়েছে।",
+    appcfg: "অ্যাপ সেটিংস সেভ হয়েছে। এক মিনিটের মধ্যে সাইটে দেখা যাবে।",
     addnj: "কুকি যোগ হয়েছে। টেস্ট করা যায়নি: ",
     nothing: "কিছু করার নেই।",
   },
@@ -332,6 +348,7 @@ const M = {
     revive: "All cookies re-enabled. Run a health check to see which really work.",
     cache: "Cache cleared. Every link will be fetched fresh next time.",
     alerts: "Alert settings saved.",
+    appcfg: "App settings saved. Live on the site within a minute.",
     addnj: "Cookie added. Could not test it: ",
     nothing: "Nothing to do.",
   },
@@ -370,6 +387,23 @@ async function runAction(action, form, env, lang) {
     await saveConfig(env, cfg);
     return m.settings;
   }
+  if (action === "appcfg") {
+    const app = cfg.app || (cfg.app = { banner: {}, push: {} });
+    const b = app.banner || (app.banner = {});
+    const p = app.push || (app.push = {});
+    const str = (k, n) => String(form.get(k) || "").trim().slice(0, n);
+    b.enabled = form.get("bEnabled") === "1";
+    b.title = str("bTitle", 60); b.sub = str("bSub", 140); b.button = str("bButton", 18);
+    b.escTitle = str("eTitle", 60); b.escSub = str("eSub", 140); b.escButton = str("eButton", 18);
+    b.delaySec = clamp(parseInt(form.get("bDelay")) || 4, 1, 60);
+    b.snoozeDays = clamp(parseInt(form.get("bSnooze")) || 5, 1, 60);
+    p.enabled = form.get("pEnabled") === "1";
+    p.after = clamp(parseInt(form.get("pAfter")) || 1, 1, 20);
+    p.title = str("pTitle", 50); p.sub = str("pSub", 80); p.button = str("pButton", 18);
+    await saveConfig(env, cfg);
+    return m.appcfg;
+  }
+
   if (action === "alerts") {
     const a = cfg.alerts;
     a.lang = String(form.get("alertLang") || "bn") === "en" ? "en" : "bn";
@@ -452,7 +486,7 @@ async function body(tab, env, msg, lang) {
   const cfg = await getConfig(env);
   const cookies = await getCookies(env);
   const live = cookies.filter((c) => c.status !== "dead").length;
-  const order = ["monitor", "home", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const order = ["monitor", "home", "users", "cookies", "ads", "seo", "settings", "diag", "help"];
 
   let alert = "";
   if (!cookies.length) alert = bad(t.a_nocookie);
@@ -462,6 +496,7 @@ async function body(tab, env, msg, lang) {
 
   const panes = {
     monitor: () => monitorTab(cfg, t, lang),
+    users: () => usersTab(env, cfg, t, lang),
     home: () => homeTab(env, cookies, t),
     cookies: () => cookiesTab(cookies, t),
     ads: () => adsTab(cfg, t, lang),
@@ -564,6 +599,137 @@ function monitorTab(cfg, t, lang) {
   <p class="dim" id="notifState">${t.mo_devices}: <b id="devCount">—</b></p>
   <pre id="pushout" class="out hide"></pre>
 </div>`;
+}
+
+/* ---------- users & app ---------- */
+
+const U = {
+  bn: {
+    stats: "অ্যাপ ও ইউজার",
+    subs: "নোটিফিকেশন নিয়েছে", inst7: "ইনস্টল (৭ দিন)", inst30: "ইনস্টল (৩০ দিন)", opens: "অ্যাপ খোলা (৭ দিন)", shares: "Share থেকে এসেছে (৭ দিন)",
+    bycountry: "কোন দেশের ইউজার নোটিফিকেশন নিয়েছে", none: "এখনো কেউ নেই।",
+    banner: "অ্যাপ ইনস্টল ব্যানার", bon: "ব্যানার চালু",
+    btitle: "শিরোনাম", bsub: "ছোট বর্ণনা", bbtn: "বাটনের লেখা",
+    esc: "Instagram-এর ভেতর থেকে এলে যা দেখাবে", delay: "কত সেকেন্ড পরে দেখাবে", snooze: "বন্ধ করলে কত দিন আর দেখাবে না",
+    optin: "নোটিফিকেশন নেওয়ার প্রস্তাব", pon: "প্রস্তাব চালু", pafter: "কতগুলো সফল ডাউনলোডের পরে প্রস্তাব দেবে",
+    ptitle: "প্রস্তাবের শিরোনাম", psub: "প্রস্তাবের ছোট লেখা", pbtn: "বাটনের লেখা",
+    save: "সেভ করুন",
+    compose: "ইউজারদের নোটিফিকেশন পাঠান",
+    ntitle: "শিরোনাম", nbody: "বার্তা", nurl: "ক্লিক করলে কোথায় যাবে", nimg: "ছবির লিংক (ঐচ্ছিক)",
+    ncountry: "দেশ (ঐচ্ছিক) — যেমন BD, IN, PK। খালি রাখলে সবাই পাবে",
+    send: "পাঠান", sending: "পাঠানো হচ্ছে...", preview: "যেমন দেখাবে",
+    recent: "আগে পাঠানো নোটিফিকেশন", c_date: "তারিখ", c_title: "শিরোনাম", c_target: "লক্ষ্য", c_sent: "পৌঁছেছে", c_fail: "ব্যর্থ", c_click: "ক্লিক",
+    g_banner:
+      "এটা সাইটের নিচে ভেসে ওঠা একটা ছোট কার্ড — পাতার কোনো লেখা সরায় না, তাই SEO বা পেজের গতিতে কোনো প্রভাব নেই।\n\nকখন দেখায়:\n• শুধু Android ফোনে (iPhone-এ অ্যাপ ইনস্টল হয় না)\n• প্রথমবার ঢুকেই না — একটা ভিডিও সফলভাবে ডাউনলোড হওয়ার পরে, অথবা দ্বিতীয়বার এলে\n• যে ফোনে ইতিমধ্যে অ্যাপ আছে সেখানে কখনো না\n• কেউ বন্ধ করলে নির্দিষ্ট দিন আর দেখায় না\n\nকেন ডাউনলোডের পরে? ঠিক ওই মুহূর্তে ইউজার সবচেয়ে খুশি — ইনস্টলের হার সবচেয়ে বেশি থাকে।\n\nInstagram-এর ভেতর থেকে এলে: Instagram-এর ব্রাউজারে অ্যাপ ইনস্টল হয় না। তখন ব্যানার বলবে \"Chrome-এ খুলুন\" — এক ট্যাপে পাতাটা Chrome-এ খুলে যায়।",
+    g_optin:
+      "নোটিফিকেশনের অনুমতি চাওয়া হয় কখনো পাতা খোলার সাথে সাথে না — শুধু সফল ডাউনলোডের পর, রেজাল্টের নিচে একটা ছোট বক্সে। ইউজার নিজে বোতাম চাপলে তবেই Chrome-এর অনুমতি চাওয়া হয়।\n\nকেন এভাবে: পাতা খুলেই অনুমতি চাইলে বেশিরভাগ মানুষ \"Block\" চাপে, আর Google এটাকে খারাপ অভিজ্ঞতা ধরে। কাজ পাওয়ার পর চাইলে অনেক বেশি মানুষ রাজি হয়।\n\n\"না\" বললে ১৪ দিন আর জিজ্ঞেস করে না।",
+    g_compose:
+      "যারা নোটিফিকেশন নিয়েছে শুধু তারাই পাবে — অ্যাপ ইনস্টল করা থাকুক বা না থাকুক।\n\nভালো নোটিফিকেশনের নিয়ম:\n• সপ্তাহে ১-২টার বেশি না। বেশি পাঠালে মানুষ নোটিফিকেশন বন্ধ করে দেয়, আর আর কখনো ফেরানো যায় না\n• শিরোনাম ছোট, ৪০ অক্ষরের মধ্যে\n• কাজের কিছু বলুন — নতুন ফিচার, দ্রুততর ডাউনলোড, নতুন টুল\n• দেশ বেছে নিলে প্রাসঙ্গিক হয়, ক্লিক বাড়ে\n\nপাঠানো ধাপে ধাপে হয় (৪০ জন করে) — বড় তালিকায় কয়েক সেকেন্ড লাগতে পারে, পাতা বন্ধ করবেন না।\n\n\"ব্যর্থ\" বা মুছে যাওয়া ঠিকানাগুলো নিজে নিজেই তালিকা থেকে বাদ যায়।",
+  },
+  en: {
+    stats: "App and users",
+    subs: "Subscribed to notifications", inst7: "Installs (7 days)", inst30: "Installs (30 days)", opens: "App opens (7 days)", shares: "Arrived via Share (7 days)",
+    bycountry: "Subscribers by country", none: "Nobody yet.",
+    banner: "App install banner", bon: "Banner on",
+    btitle: "Title", bsub: "Short description", bbtn: "Button text",
+    esc: "What to show inside Instagram's browser", delay: "Show after N seconds", snooze: "Days to stay hidden after dismissing",
+    optin: "Notification opt-in offer", pon: "Offer on", pafter: "Offer after N successful downloads",
+    ptitle: "Offer title", psub: "Offer text", pbtn: "Button text",
+    save: "Save",
+    compose: "Send a notification to users",
+    ntitle: "Title", nbody: "Message", nurl: "Where a tap goes", nimg: "Image link (optional)",
+    ncountry: "Countries (optional) — e.g. BD, IN, PK. Empty means everyone",
+    send: "Send", sending: "Sending...", preview: "Preview",
+    recent: "Previously sent", c_date: "Date", c_title: "Title", c_target: "Target", c_sent: "Delivered", c_fail: "Failed", c_click: "Clicks",
+    g_banner:
+      "A small card that floats up from the bottom — it never pushes page content, so SEO and page speed are untouched.\n\nWhen it shows:\n• Android phones only (iPhone cannot install it)\n• Never on first arrival — only after a successful download, or on a return visit\n• Never on a phone that already has the app\n• Hidden for the set number of days once dismissed\n\nWhy after a download? That is the moment people are happiest with the site, so install rates are highest.\n\nFrom inside Instagram: Instagram's browser cannot install apps, so the banner offers \"Open in Chrome\" — one tap moves the page into Chrome.",
+    g_optin:
+      "Permission is never asked on page load — only after a successful download, in a small box under the result. Chrome's permission prompt appears only when the user taps the button.\n\nWhy: asking on load gets mostly \"Block\", and Google treats it as a poor experience. Asking after people got what they came for converts far better.\n\nIf they say no, they are not asked again for 14 days.",
+    g_compose:
+      "Only people who opted in receive it — whether or not they installed the app.\n\nRules for good notifications:\n• No more than one or two a week. Overdo it and people switch notifications off, and you never get them back\n• Keep the title short, under 40 characters\n• Say something useful — a new feature, faster downloads, a new tool\n• Targeting a country makes it relevant and lifts clicks\n\nSending happens in batches of 40 — a big list may take a few seconds, so keep the page open.\n\nFailed or expired addresses are removed from the list automatically.",
+  },
+};
+
+async function usersTab(env, cfg, t, lang) {
+  const T = U[lang];
+  const a = await audience(env);
+  const b = (cfg.app && cfg.app.banner) || {};
+  const p = (cfg.app && cfg.app.push) || {};
+  const ck = (v) => (v ? "checked" : "");
+  const v = (x) => esc(x == null ? "" : String(x));
+  const d = (ts) => new Date(ts).toLocaleDateString(lang === "bn" ? "bn-BD" : "en-GB", { day: "numeric", month: "short" });
+
+  return `
+<div class="cards">
+  ${stat(T.subs, a.subscribers)}
+  ${stat(T.inst7, a.installs7)}
+  ${stat(T.inst30, a.installs30)}
+  ${stat(T.opens, a.opens7)}
+  ${stat(T.shares, a.shares7)}
+</div>
+
+<div class="box">
+  <h3>${T.bycountry}</h3>
+  ${a.countries.length
+    ? `<table><tr><th>${t.country}</th><th>#</th></tr>${a.countries.map((c) => `<tr><td>${esc(c.country)}</td><td>${c.n}</td></tr>`).join("")}</table>`
+    : `<p class="dim">${T.none}</p>`}
+</div>
+
+<div class="box">
+  <h3>${T.compose}</h3>
+  ${guide(t.guide, T.g_compose)}
+  <label>${T.ntitle}</label>
+  <input id="nTitle" maxlength="80" placeholder="New: share any reel to download it">
+  <label>${T.nbody}</label>
+  <textarea id="nBody" rows="3" maxlength="220" placeholder="Open Instagram, tap Share on a reel, pick IGtoDownload — done."></textarea>
+  <label>${T.nurl}</label>
+  <input id="nUrl" value="/" placeholder="/ or /reels or a full link">
+  <label>${T.nimg}</label>
+  <input id="nImg" placeholder="https://...jpg">
+  <label>${T.ncountry}</label>
+  <input id="nCountry" placeholder="BD, IN">
+  <div class="npreview" id="nPrev"><img src="/icon-192.png" alt=""><div><b id="pvT">—</b><span id="pvB">—</span></div></div>
+  <div class="row"><button class="btn" id="nSend" onclick="sendBroadcast()">${T.send}</button></div>
+  <div class="progress hide" id="nProg"><span id="nBar"></span></div>
+  <p class="dim" id="nStat"></p>
+</div>
+
+<div class="box">
+  <h3>${T.recent}</h3>
+  ${a.recent.length
+    ? `<table class="wide"><tr><th>${T.c_date}</th><th>${T.c_title}</th><th>${T.c_target}</th><th>${T.c_sent}</th><th>${T.c_fail}</th><th>${T.c_click}</th></tr>${a.recent
+        .map((r) => `<tr><td>${d(r.created)}</td><td>${esc(r.title)}${r.countries ? ` <span class="dim">(${esc(r.countries)})</span>` : ""}</td><td>${r.target}</td><td>${r.sent}</td><td>${r.failed + r.gone}</td><td>${r.clicks}</td></tr>`)
+        .join("")}</table>`
+    : `<p class="dim">${T.none}</p>`}
+</div>
+
+<div class="box">
+  <form method="post" action="/admin?do=appcfg">
+    <input type="hidden" name="tab" value="users">
+    <h3>${T.banner}</h3>
+    ${guide(t.guide, T.g_banner)}
+    <label class="check"><input type="checkbox" name="bEnabled" value="1" ${ck(b.enabled)}> <b>${T.bon}</b></label>
+    <label>${T.btitle}</label><input name="bTitle" maxlength="60" value="${v(b.title)}">
+    <label>${T.bsub}</label><input name="bSub" maxlength="140" value="${v(b.sub)}">
+    <label>${T.bbtn}</label><input name="bButton" maxlength="18" value="${v(b.button)}">
+    <h3 style="margin-top:18px;font-size:14px">${T.esc}</h3>
+    <label>${T.btitle}</label><input name="eTitle" maxlength="60" value="${v(b.escTitle)}">
+    <label>${T.bsub}</label><input name="eSub" maxlength="140" value="${v(b.escSub)}">
+    <label>${T.bbtn}</label><input name="eButton" maxlength="18" value="${v(b.escButton)}">
+    <label>${T.delay}</label><input name="bDelay" type="number" min="1" max="60" value="${v(b.delaySec || 4)}">
+    <label>${T.snooze}</label><input name="bSnooze" type="number" min="1" max="60" value="${v(b.snoozeDays || 5)}">
+
+    <h3 style="margin-top:24px">${T.optin}</h3>
+    ${guide(t.guide, T.g_optin)}
+    <label class="check"><input type="checkbox" name="pEnabled" value="1" ${ck(p.enabled)}> <b>${T.pon}</b></label>
+    <label>${T.pafter}</label><input name="pAfter" type="number" min="1" max="20" value="${v(p.after || 1)}">
+    <label>${T.ptitle}</label><input name="pTitle" maxlength="50" value="${v(p.title)}">
+    <label>${T.psub}</label><input name="pSub" maxlength="80" value="${v(p.sub)}">
+    <label>${T.pbtn}</label><input name="pButton" maxlength="18" value="${v(p.button)}">
+    <button class="btn">${T.save}</button>
+  </form>
+</div>
+<script>window.__U=${JSON.stringify({ sending: T.sending, send: T.send }).replace(/</g, "\\u003c")};</script>`;
 }
 
 /* ---------- dashboard ---------- */
@@ -1012,8 +1178,8 @@ async function sessKey(env) {
   const secret = (env.SIGN_SECRET || "igtodownload-default-change-me") + "|admin";
   return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
-async function mkSession(env) {
-  const t = btoa(String(Date.now() + SESSION_HOURS * 3600_000)).replace(/=+$/, "");
+async function mkSession(env, hours) {
+  const t = btoa(String(Date.now() + (hours || SESSION_HOURS) * 3600_000)).replace(/=+$/, "");
   const sig = await crypto.subtle.sign("HMAC", await sessKey(env), new TextEncoder().encode(t));
   const s = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return t + "." + s;
@@ -1102,6 +1268,12 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 .slothead select{width:auto;padding:6px 9px;font-size:12.5px;margin-left:auto}
 .out{background:#0d0d13;border:1px solid #26262f;border-radius:10px;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;margin-top:12px;max-height:340px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}
 .hide{display:none}
+.npreview{display:flex;gap:11px;align-items:center;background:#0f0f16;border:1px solid #23232c;border-radius:13px;padding:12px;margin-top:14px}
+.npreview img{width:38px;height:38px;border-radius:9px;flex:none}
+.npreview b{display:block;font-size:14px}
+.npreview span{display:block;color:#9a9aa8;font-size:12.5px;margin-top:2px;line-height:1.45}
+.progress{height:8px;border-radius:8px;background:#1b1b24;overflow:hidden;margin-top:12px}
+.progress span{display:block;height:100%;width:0;background:linear-gradient(90deg,#ff8a3d,#f9377d 48%,#8a3ffc);transition:width .3s ease}
 .stathead{display:flex;align-items:center;gap:10px}
 .stathead h3{margin:0}
 .age{margin-left:auto;color:#8c8c9b;font-size:12px}
@@ -1162,9 +1334,11 @@ function pattern(){
   var p=[];for(var i=0;i<n;i++){p.push(on);if(i<n-1)p.push(gap)}
   return p;
 }
+var APP = window.IGtoApp || null;
 function buzz(){
   var p=pattern();
   if(!p) return false;
+  if(APP){try{APP.vibrate(p.join(','));return true}catch(e){}}
   if(navigator.vibrate){try{navigator.vibrate(p);return true}catch(e){}}
   return false;
 }
@@ -1177,6 +1351,7 @@ function testVib(){
     AL.vibrateGapMs=parseInt(form.vibrateGapMs.value)||400;
     AL.vibrate=form.vibrate.checked;
   }
+  if(APP){ var p=pattern(); APP.testAlert(p?p.join(','):''); return; }
   if(!buzz()) alert('This phone or browser does not support vibration (iPhone does not).');
 }
 
@@ -1269,6 +1444,7 @@ function b64ToU8(b){
   return out;
 }
 async function enableNotif(){
+  if(APP){ APP.batterySettings(); return; }
   try{
     if(!('serviceWorker' in navigator)||!('PushManager' in window)){
       alert('This browser cannot receive push notifications. On iPhone, install the app to the home screen first.');return;
@@ -1303,8 +1479,62 @@ async function doInstall(){
   var b=el('btnInstall'); if(b)b.style.display='none';
 }
 
+/* ---------- user notifications ---------- */
+function pv(){
+  var t=el('nTitle'), b=el('nBody'); if(!t)return;
+  el('pvT').textContent=t.value||'\u2014'; el('pvB').textContent=b.value||'\u2014';
+}
+['nTitle','nBody'].forEach(function(id){ var x=el(id); if(x) x.addEventListener('input',pv); });
+async function sendBroadcast(){
+  var U=window.__U||{sending:'Sending...',send:'Send'};
+  var body={title:el('nTitle').value,body:el('nBody').value,url:el('nUrl').value,image:el('nImg').value,countries:el('nCountry').value};
+  if(!body.title.trim()||!body.body.trim()){alert('Title and message are required.');return}
+  if(!confirm('Send this notification now?'))return;
+  var btn=el('nSend'); btn.disabled=true; btn.textContent=U.sending;
+  el('nProg').classList.remove('hide'); el('nBar').style.width='2%';
+  try{
+    var r=await fetch('/admin?api=bcreate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    var c=await r.json(); if(c.error) throw new Error(c.error);
+    if(!c.target){ el('nStat').textContent='No subscribers match yet. Nothing was sent.'; el('nBar').style.width='100%'; return; }
+    var s; var guard=0;
+    do{
+      s=await (await fetch('/admin?api=bsend&id='+c.id)).json();
+      if(s.error) throw new Error(s.error);
+      var done=(s.sent+s.failed+s.gone);
+      el('nBar').style.width=Math.min(100,Math.round(done/Math.max(1,s.target)*100))+'%';
+      el('nStat').textContent='Delivered '+s.sent+' \u00b7 failed '+s.failed+' \u00b7 expired '+s.gone+' \u00b7 of '+s.target;
+    }while(!s.done && ++guard<2000);
+    el('nBar').style.width='100%';
+  }catch(e){ el('nStat').textContent='Stopped: '+(e&&e.message||e); }
+  finally{ btn.disabled=false; btn.textContent=U.send; }
+}
+
+/* ---------- admin app extras ---------- */
+function appPanel(){
+  if(!APP) return;
+  var box=el('notifState'); if(!box) return;
+  var bn=!/(?:^|; )iglang=en/.test(document.cookie);
+  var T=bn?{bg:'ব্যাকগ্রাউন্ড চেক',every:'প্রতি ১৫ মিনিটে',last:'শেষ চেক',never:'এখনো হয়নি',bat:'ব্যাটারি',free:'সীমাহীন ✓',limited:'সীমিত — চাপুন',lock:'আঙুলের ছাপ লক',on:'চালু',off:'বন্ধ',now:'এখনই চেক',ver:'অ্যাপ'}
+             :{bg:'Background check',every:'every 15 minutes',last:'Last check',never:'not yet',bat:'Battery',free:'Unrestricted ✓',limited:'Restricted — tap',lock:'Fingerprint lock',on:'On',off:'Off',now:'Check now',ver:'App'};
+  var last=APP.lastCheck(); var mins=last?Math.round((Date.now()-last)/60000):-1;
+  var free=APP.batteryFree(); var lock=APP.lockEnabled();
+  box.innerHTML=
+    '<div class="layers" style="margin-top:6px">'+
+    layer('\u23F1',T.bg,T.every,true)+
+    layer('\u2713',T.last,mins<0?T.never:(mins+(bn?' মিনিট আগে':' min ago')),mins>=0&&mins<40)+
+    '<div class="layer" id="batRow" style="cursor:pointer"><span class="num">\u26A1</span><span>'+T.bat+'</span><span class="pill '+(free?'on':'off')+'">'+(free?T.free:T.limited)+'</span></div>'+
+    '<div class="layer" id="lockRow" style="cursor:pointer"><span class="num">\u{1F512}</span><span>'+T.lock+'</span><span class="pill '+(lock?'on':'off')+'">'+(lock?T.on:T.off)+'</span></div>'+
+    '</div><p class="dim" style="margin-top:10px">'+T.ver+' '+APP.version()+'</p>';
+  el('batRow').onclick=function(){APP.batterySettings()};
+  el('lockRow').onclick=function(){APP.setLock(!APP.lockEnabled());appPanel()};
+  var b=el('btnNotif'); if(b){ b.textContent=free?T.now:(bn?'ব্যাকগ্রাউন্ডে চলতে দিন':'Allow background running'); b.onclick=free?function(){APP.checkNow();setTimeout(appPanel,4000)}:function(){APP.batterySettings()}; }
+  var tp=document.querySelector('button[onclick="testPush()"]'); if(tp) tp.style.display='none';
+}
+
 /* ---------- boot ---------- */
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/admin'}).catch(function(){}); }
 if(el('bigstat')) poll(true);
+appPanel();
+document.addEventListener('visibilitychange',function(){ if(!document.hidden) appPanel(); });
 document.addEventListener('visibilitychange',function(){ if(!document.hidden&&el('bigstat')) poll(true); });
 `;

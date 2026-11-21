@@ -34,6 +34,26 @@ export const DEFAULT_CONFIG = {
     notifyWarn: true,
     repeatMinutes: 180,
   },
+  app: {
+    banner: {
+      enabled: false,
+      title: "Get the IGtoDownload app",
+      sub: "Faster and smoother. Share any reel straight to the app to save it.",
+      button: "Install",
+      escTitle: "Open in Chrome for the app",
+      escSub: "Instagram's browser cannot install apps. One tap opens this page in Chrome.",
+      escButton: "Open",
+      delaySec: 4,
+      snoozeDays: 5,
+    },
+    push: {
+      enabled: true,
+      after: 1,
+      title: "Get new features first",
+      sub: "Rare updates, no spam.",
+      button: "Notify me",
+    },
+  },
   ads: {},
   seo: {},
 };
@@ -201,7 +221,7 @@ export async function getStats(env) {
       d30
     );
     const countries = await q(
-      "SELECT country, COUNT(*) n FROM events WHERE day>=? AND country!='' GROUP BY country ORDER BY n DESC LIMIT 8",
+      "SELECT country, COUNT(*) n FROM events WHERE day>=? AND kind='resolve' AND country!='' GROUP BY country ORDER BY n DESC LIMIT 8",
       d7
     );
     const errors = await q(
