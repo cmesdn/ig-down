@@ -11,6 +11,7 @@ import { createBroadcast, sendBatch, audience, testOne } from "./broadcast.js";
 import { liveNow, report, resetData } from "./visits.js";
 import { flushAll } from "./store.js";
 import { esc } from "./pages.js";
+import { cmsApi, blogTab, msgsTab, inbox, clearMessages, CMS_CSS, CMS_JS } from "./cms.js";
 
 const SESSION_HOURS = 24;
 const TRIES = new Map();
@@ -22,7 +23,7 @@ const L = {
     admin: "এডমিন", signout: "সাইন আউট", signin: "সাইন ইন", password: "পাসওয়ার্ড",
     wrongpw: "ভুল পাসওয়ার্ড।", toomany: "অনেকবার ভুল হয়েছে। কয়েক মিনিট পর আবার চেষ্টা করুন।",
     guide: "📖 গাইড দেখুন", save: "সেভ করুন",
-    tabs: { monitor: "লাইভ", visitors: "ভিজিটর", home: "ড্যাশবোর্ড", users: "নোটিফিকেশন", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
+    tabs: { msgs: "মেসেজ", blog: "ব্লগ ও পেজ", monitor: "লাইভ", visitors: "ভিজিটর", home: "ড্যাশবোর্ড", users: "নোটিফিকেশন", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
 
     a_nocookie: "এখনো কোনো সেশন কুকি নেই। কুকি ট্যাবে গিয়ে একটা যোগ করুন, নইলে কোনো ডাউনলোড হবে না।",
     a_alldead: "সব কুকি মৃত। সাইট এখন কিছুই ডাউনলোড করতে পারছে না। কুকি ট্যাবে নতুন sessionid যোগ করুন।",
@@ -109,7 +110,7 @@ const L = {
     admin: "admin", signout: "Sign out", signin: "Sign in", password: "Password",
     wrongpw: "Wrong password.", toomany: "Too many attempts. Try again in a few minutes.",
     guide: "📖 Show guide", save: "Save",
-    tabs: { monitor: "Live", visitors: "Visitors", home: "Dashboard", users: "Notify", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
+    tabs: { msgs: "Messages", blog: "Blog & pages", monitor: "Live", visitors: "Visitors", home: "Dashboard", users: "Notify", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
 
     a_nocookie: "No session cookies yet. Downloads will fail until you add one in the Cookies tab.",
     a_alldead: "Every cookie is dead. The site cannot download anything right now. Add a fresh sessionid in the Cookies tab.",
@@ -262,11 +263,16 @@ export async function handleAdmin(request, url, env, ctx) {
 /* ===================== json api ===================== */
 
 async function handleApi(api, request, url, env, lang) {
+  if (/^(cms_|msg_)/.test(api)) {
+    const r = await cmsApi(api, request, url, env, lang);
+    if (r) return r;
+  }
   switch (api) {
     case "status":
     case "pubstatus": {
       const st = await siteStatus(env);
       st.liveNow = (await liveNow(env)).now;
+      Object.assign(st, await inbox(env));
       st.line = statusLine(st, (st.alerts && st.alerts.lang) || lang);
       return json(st);
     }
@@ -325,6 +331,7 @@ async function handleApi(api, request, url, env, lang) {
         return json({ error: lang === "bn" ? "ঠিক Confirmed লিখতে হবে (বড় হাতের C)।" : "Type Confirmed exactly (capital C)." }, 400);
       const scope = b.scope === "all" ? "all" : "stats";
       const done = await resetData(env, scope);
+      if (scope === "all") { try { await clearMessages(env); } catch (_) {} }
       flushAll();
       return json({ ok: true, scope, cleared: done });
     }
@@ -338,7 +345,8 @@ async function handleApi(api, request, url, env, lang) {
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const id = (Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 16);
-      await env.CONFIG.put("nimg:" + id, bytes.buffer, { expirationTtl: 90 * 86400 });
+      // pictures for blog posts are kept for good; notification pictures expire after 90 days
+      await env.CONFIG.put("nimg:" + id, bytes.buffer, b.keep ? {} : { expirationTtl: 90 * 86400 });
       return json({ ok: true, url: "/n/" + id + ".jpg", size: bin.length });
     }
     default:
@@ -521,7 +529,8 @@ async function body(tab, env, msg, lang) {
   const cfg = await getConfig(env);
   const cookies = await getCookies(env);
   const live = cookies.filter((c) => c.status !== "dead").length;
-  const order = ["monitor", "visitors", "users", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const order = ["monitor", "visitors", "users", "msgs", "blog", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const ib = await inbox(env);
 
   let alert = "";
   if (!cookies.length) alert = bad(t.a_nocookie);
@@ -533,6 +542,8 @@ async function body(tab, env, msg, lang) {
     monitor: () => monitorTab(cfg, t, lang),
     visitors: () => visitorsTab(lang),
     users: () => usersTab(env, cfg, t, lang),
+    msgs: () => msgsTab(lang),
+    blog: () => blogTab(lang),
     home: () => homeTab(env, cookies, t),
     cookies: () => cookiesTab(cookies, t),
     ads: () => adsTab(cfg, t, lang),
@@ -551,7 +562,7 @@ async function body(tab, env, msg, lang) {
   </div>
   <a class="out" href="/admin?logout=1" title="${t.signout}" aria-label="${t.signout}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg></a>
 </div>
-<div class="tabs">${order.map((k) => `<a href="/admin?tab=${k}" class="${k === tab ? "on" : ""}">${t.tabs[k]}</a>`).join("")}</div>
+<div class="tabs">${order.map((k) => `<a href="/admin?tab=${k}" class="${k === tab ? "on" : ""}">${t.tabs[k]}${k === "msgs" && ib.unread ? `<b class="tbadge">${ib.unread}</b>` : ""}</a>`).join("")}</div>
 ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
 ${alert}
 ${await panes[tab in panes ? tab : "monitor"]()}`;
@@ -1367,9 +1378,9 @@ function page(inner, bare, lang) {
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <title>Admin — IGtoDownload</title>
-<style>${ACSS}</style></head>
+<style>${ACSS}${CMS_CSS}</style></head>
 <body class="${bare ? "bare" : ""}"><div class="wrap">${inner}</div>
-<script>${AJS}</script></body></html>`,
+<script>${AJS}</script><script>${CMS_JS}</script></body></html>`,
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } }
   );
 }
@@ -1439,6 +1450,7 @@ body.bare{display:grid;place-items:center;min-height:100vh;padding:20px}
   background:#15151d;border:1px solid #23232c;color:#9a9aa8;text-decoration:none;font-size:13.5px;font-weight:600;
   -webkit-tap-highlight-color:transparent;transition:transform .15s ease}
 .tabs a:active{transform:scale(.96)}
+.tbadge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f9377d;color:#fff;font-size:11px;margin-left:6px}
 .tabs a.on{background:linear-gradient(100deg,#ff8a3d,#f9377d 48%,#8a3ffc);color:#fff;border-color:transparent}
 .msg{background:rgba(43,217,124,.1);border:1px solid rgba(43,217,124,.35);padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}
 .alert{padding:11px 14px;border-radius:11px;margin-bottom:12px;font-size:14px}

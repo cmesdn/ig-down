@@ -7,6 +7,7 @@ import { getConfig, prune } from "./store.js";
 import { resolveMedia, handleDownload, handleStream, handleImage, healthCheck, shortcode } from "./resolve.js";
 import { handleAdmin } from "./admin.js";
 import { route, render, sitemap, robots, esc } from "./pages.js";
+import { handleContact } from "./cms.js";
 import { ogImage, appIcon, icon192, icon512, iconMaskable } from "./assets.js";
 import { manifest, SW } from "./pwa.js";
 import { siteStatus } from "./monitor.js";
@@ -73,10 +74,12 @@ export default {
         return new Response(img, { headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=2592000, immutable" } });
       }
 
+      if (path === "/api/contact") return await handleContact(request, env, ctx);
+
       if (path === "/api/event" && request.method === "POST") {
         const body = await request.json().catch(() => ({}));
         const k = String((body && body.k) || "");
-        const KEEP = ["install", "app_open", "share_in", "push_click", "banner_shown", "banner_accept", "notify_accept"];
+        const KEEP = ["install", "app_open", "share_in", "push_click", "banner_shown", "banner_accept", "notify_accept", "appsec_tap", "appsec_accept"];
         if (KEEP.includes(k)) {
           if (k === "push_click") ctx.waitUntil(countClick(env, body.id));
           ctx.waitUntil(logEvent(env, { kind: k, ok: true, country: request.headers.get("CF-IPCountry") || "" }));
@@ -106,7 +109,7 @@ export default {
 
       // --- machine files
       if (path === "/sitemap.xml")
-        return new Response(sitemap(origin), { headers: { "content-type": "application/xml", "cache-control": "public, max-age=3600" } });
+        return new Response(await sitemap(origin, env), { headers: { "content-type": "application/xml", "cache-control": "public, max-age=3600" } });
       if (path === "/robots.txt")
         return new Response(robots(origin), { headers: { "content-type": "text/plain", "cache-control": "public, max-age=3600" } });
 
@@ -164,10 +167,10 @@ export default {
       }
 
       // --- pages
-      const match = route(path);
+      const match = await route(path, env);
       if (match) {
         const html = await render(match, env, origin);
-        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
+        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" } });
       }
 
       return new Response(notFound(origin), { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });

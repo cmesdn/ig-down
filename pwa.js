@@ -60,6 +60,14 @@ self.addEventListener('push', function(event){
       if (r.ok) st = await r.json();
     } catch (e) {}
     if (!st) st = { level: 'warn', alerts: {} };
+    if (st.ping && st.lastMsg) {
+      var bnm = !st.alerts || st.alerts.lang !== 'en';
+      var m = st.lastMsg;
+      await self.registration.showNotification(
+        (st.unread > 1 ? (bnm ? '✉️ ' + st.unread + 'টা নতুন মেসেজ' : '✉️ ' + st.unread + ' new messages') : (bnm ? '✉️ নতুন মেসেজ: ' : '✉️ New message from ') + m.name),
+        { body: m.topic + ' — ' + m.snippet, icon: '/icon-192.png', badge: '/icon-192.png', tag: 'igto-msg', renotify: true, vibrate: [200, 120, 200], data: { url: '/admin?tab=msgs' } });
+      if (st.level === 'ok') return;
+    }
     var txt = lineFor(st);
     var opts = {
       body: txt[1],

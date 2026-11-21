@@ -5,6 +5,7 @@
 
 import { getConfig, AD_SLOTS } from "./store.js";
 import { APP_HEAD, SPLASH, APP_CSS, APP_JS } from "./app.js";
+import { md, headings, plain, listPosts, getPost, getPage, getToolText, PAGE_KEYS } from "./content.js";
 
 /* ===================== content ===================== */
 
@@ -109,122 +110,24 @@ export const TOOLS = {
   },
 };
 
-const LEGAL = {
-  privacy: {
-    title: "Privacy Policy",
-    desc: "How IGtoDownload handles your data: what we collect, what we do not, cookies, analytics and advertising.",
-    body: [
-      ["What we collect", "We do not ask for an account, an email address or any Instagram credentials. The link you paste is used to fetch the media and is not tied to you. We keep aggregate counts — how many requests succeeded, how many times the app was installed or opened, and which country a request came from — so we can tell whether the service is working. Country is worked out from the network connection; we never request your device location. Those counts contain no personal identifiers."],
-      ["Files and storage", "Downloaded media is never written to our servers. When you press download, the file streams from Instagram's content servers through this site to your device, and nothing is retained afterwards."],
-      ["Data kept on your device", "A few small values are stored in your own browser so the site works the way you left it: your light or dark theme, a list of your recent downloads (so you can find them again), and whether you closed the install banner. This stays on your device and is never sent to us. Clearing your browser data, or tapping Clear in the recent downloads list, removes it."],
-      ["Notifications", "If you choose to turn on notifications, your browser gives us an anonymous delivery address. We store it with your country so we can send occasional, relevant updates. It does not identify you. You can turn notifications off at any time in your browser or phone settings, and the address is deleted from our list the next time a message cannot be delivered to it."],
-      ["The installed app", "Installing the app adds a shortcut that opens this site full screen. It uses the same site and the same rules described here. When you share a reel to the app, only the shared link is read; nothing else on your device is accessed. If you have allowed clipboard access, the app may read a copied Instagram link when you open it, to save you a step — nothing else is read, and nothing is sent anywhere except the link you choose to download."],
-      ["Analytics", "We may use Google Analytics to understand which pages people find useful. Google processes this data under its own privacy policy. You can block it with any standard browser setting or extension."],
-      ["Advertising", "Pages may display ads from third-party networks. Those networks may use cookies to show relevant ads. You can manage ad personalisation through your Google account settings or your browser."],
-      ["Third parties", "Media is fetched from Instagram, which is operated by Meta. Your use of their content remains subject to their terms."],
-      ["Changes", "If this policy changes, the updated version will be posted on this page."],
-    ],
-  },
-  terms: {
-    title: "Terms of Service",
-    desc: "The terms you agree to when using IGtoDownload, including acceptable use and limitations of liability.",
-    body: [
-      ["Acceptable use", "This service is provided so that you can save content you created yourself, or content you have the creator's permission to save. You agree not to use it to copy, redistribute or republish anyone else's work without their consent. Respecting copyright is your responsibility, not ours."],
-      ["No affiliation", "IGtoDownload is an independent tool. It is not affiliated with, endorsed by, or connected to Instagram or Meta Platforms in any way. All trademarks belong to their respective owners."],
-      ["Public content only", "Only publicly accessible posts can be processed. No attempt is made to access private accounts, and we will not add such a feature."],
-      ["No storage", "We do not host, store or index any media. Files remain on Instagram's servers and are streamed to you on request."],
-      ["Availability", "The service is offered as-is, with no guarantee of uptime. Instagram can change how its platform works at any time, which may interrupt the service without notice."],
-      ["Limitation of liability", "We are not liable for how you use files obtained through this site, or for any loss arising from its use."],
-      ["Acceptance", "Using this site means you accept these terms. If you do not accept them, please do not use it."],
-    ],
-  },
-  dmca: {
-    title: "DMCA & Copyright",
-    desc: "How to report a copyright concern about content accessed through IGtoDownload.",
-    body: [
-      ["Our position", "IGtoDownload does not host, store or distribute any media. It reads publicly available links and streams the file from Instagram's own servers to the person who requested it. Because no copy exists on our infrastructure, there is nothing for us to take down in the usual sense."],
-      ["Where content actually lives", "All media remains on Instagram's servers. If you believe your copyrighted work has been published without permission, the effective route is to report it directly to Instagram, who can remove it at the source."],
-      ["Contact us anyway", "If you still wish to raise a concern with us, use the contact page. Please include the post link, a description of the work, a statement of your good-faith belief that the use is unauthorised, and your contact details."],
-      ["Response", "Reports are reviewed and answered. Where we can act, we will — including blocking specific links from being processed."],
-    ],
-  },
-  about: {
-    title: "About",
-    desc: "What IGtoDownload is, how it works, and why it exists.",
-    body: [
-      ["What this is", "A single-purpose tool: paste a public Instagram link, get the file. No account, no app, no upsell. It was built because the alternatives were slow, covered in pop-ups, or quietly re-encoded videos into something worse than the original."],
-      ["How it works", "When you paste a link, the post's public metadata is read and the highest-quality media URL is picked. The file is then streamed through to your browser so it saves with a sensible filename instead of opening in a new tab."],
-      ["Speed", "The site runs on a global edge network, so the server handling your request is usually in your own region. Repeated links are served from cache, which is why the second person to paste a popular reel gets it almost instantly."],
-      ["What it will not do", "It will not touch private accounts, it will not ask for your password, and it will not store your downloads."],
-    ],
-  },
-  contact: {
-    title: "Contact",
-    desc: "Get in touch with the IGtoDownload team about bugs, copyright or partnerships.",
-    body: [
-      ["Get in touch", "Questions, bug reports, copyright concerns and partnership enquiries are all welcome. The fastest way to get a useful answer is to include the link you were trying to download and what happened instead."],
-      ["Reporting a broken link", "Instagram changes its platform often. If a link stops working, tell us the exact URL and roughly when you tried — that is usually enough to pin down the cause."],
-      ["Response time", "Most messages are answered within a couple of days."],
-    ],
-  },
-};
-
-const BLOG = [
-  {
-    slug: "how-to-download-instagram-reels",
-    title: "How to Download Instagram Reels on Any Device (2026 Guide)",
-    desc: "A step-by-step guide to saving Instagram reels on Android, iPhone, Windows and Mac — in full quality and without a watermark.",
-    date: "2026-11-21",
-    body: [
-      ["Why saving a reel is harder than it should be", "Instagram has no download button for other people's reels. The screen-record workaround costs you quality, picks up your notification sounds, and leaves the interface in frame. Copying the link and fetching the original file avoids all three problems, and takes about ten seconds."],
-      ["Step 1: copy the reel link", "Open the reel in the Instagram app, tap the paper-plane share icon under it, and choose Copy link. On desktop, open the reel and copy the address from the browser bar. Either format works."],
-      ["Step 2: paste it into the downloader", "Open the reels downloader, tap the input box and paste. If your browser supports it, the Paste button fills the field in one tap."],
-      ["Step 3: pick a quality and save", "The result shows the resolution and file size before you commit. Tap the download button and the MP4 saves straight to your device."],
-      ["Where the file ends up", "Android puts it in Downloads, and most galleries pick it up within a minute. iPhone saves to the Files app; open Files, find the MP4 in Downloads, share it, and choose Save Video to move it into Photos."],
-      ["A note on using what you save", "Downloading for personal viewing is one thing; reposting someone's work as your own is another. Credit the creator, and ask first if you plan to publish it anywhere."],
-    ],
-  },
-  {
-    slug: "instagram-download-not-working",
-    title: "Instagram Download Not Working? Here's How to Fix It",
-    desc: "The common reasons an Instagram downloader fails — private accounts, expired links, deleted posts — and what actually fixes each one.",
-    date: "2026-11-21",
-    body: [
-      ["The account is private", "This is the single most common cause. If the profile has a padlock, its posts are not publicly accessible and no tool can reach them. Checking takes a second: open the link in a browser where you are logged out. If you see a login wall, the post is private."],
-      ["The post was deleted or archived", "A link keeps its shape after the post is gone. If the page shows a 'sorry, this page isn't available' message, the content no longer exists on Instagram's servers and cannot be recovered."],
-      ["You copied the wrong link", "Copying a profile URL instead of a post URL is easy to do. A valid post link contains /reel/, /p/ or /tv/ followed by a short code. If yours does not, go back and use Share then Copy link rather than copying from the address bar."],
-      ["The download link expired", "Media links generated for you are time-limited for security. If you leave the page open for hours and then press download, you will get an expiry message. Paste the link again to generate a fresh one."],
-      ["The story already expired", "Stories are gone 24 hours after posting unless the creator saved them to a highlight. Once expired, there is nothing left to download."],
-      ["Instagram changed something", "Occasionally Instagram changes how its platform responds, and every downloader breaks at once. These outages are usually short. If a link that worked yesterday fails today and none of the above applies, waiting an hour or two is often all it takes."],
-    ],
-  },
-  {
-    slug: "download-instagram-video-hd-quality",
-    title: "How to Download Instagram Videos in Full HD Quality",
-    desc: "Why most downloaders give you a compressed file, and how to make sure you get the original 1080p video instead.",
-    date: "2026-11-21",
-    body: [
-      ["Quality is lost in two places", "First, Instagram compresses on upload — nothing can undo that. Second, and avoidable, many downloaders re-encode the video on their own servers to save bandwidth. That second pass is where the mush comes from, and it is entirely unnecessary."],
-      ["What 'original quality' actually means", "Instagram stores several renditions of each video at different resolutions, and serves whichever suits the viewer's connection. A good downloader asks for the list and takes the largest one. For reels that is typically 1080×1920."],
-      ["How to check what you got", "On Android, long-press the file and open Details. On iPhone, open it in Files and check Info. If a reel comes back at 640×1136 instead of 1080×1920, the tool downgraded it."],
-      ["Screen recording is not a substitute", "A screen recording captures what your display showed, not the source file — so you inherit your screen's resolution, any dropped frames, and whatever was on screen at the time. It is always worse than the original."],
-      ["What to look for in a downloader", "Show the resolution before downloading, list every quality available, state the file size, and never add a watermark. If a tool hides all of that, assume it has something to hide."],
-    ],
-  },
-];
-
 /* ===================== router ===================== */
 
-export function route(pathname) {
+export async function route(pathname, env) {
   const p = pathname.replace(/\/+$/, "") || "/";
-  if (p === "/") return { kind: "tool", data: TOOLS[""] };
-  const seg = p.slice(1);
-  if (TOOLS[seg]) return { kind: "tool", data: TOOLS[seg] };
-  if (LEGAL[seg]) return { kind: "legal", data: LEGAL[seg], slug: seg };
-  if (seg === "blog") return { kind: "bloglist" };
+  const seg = p === "/" ? "" : p.slice(1);
+  if (seg in TOOLS) {
+    const ov = (await getToolText(env))[TOOLS[seg].slug];
+    if (!ov) return { kind: "tool", data: TOOLS[seg] };
+    const d = Object.assign({}, TOOLS[seg]);
+    for (const k of ["title", "desc", "h1", "intro"]) if (ov[k]) d[k] = ov[k];
+    if (ov.faq && ov.faq.length) d.faq = ov.faq;
+    return { kind: "tool", data: d };
+  }
+  if (PAGE_KEYS.includes(seg)) return { kind: "legal", data: await getPage(env, seg), slug: seg };
+  if (seg === "blog") return { kind: "bloglist", data: await listPosts(env) };
   if (seg.startsWith("blog/")) {
-    const post = BLOG.find((b) => b.slug === seg.slice(5));
-    if (post) return { kind: "post", data: post };
+    const post = await getPost(env, seg.slice(5));
+    if (post) return { kind: "post", data: post, more: (await listPosts(env)).filter((x) => x.slug !== post.slug).slice(0, 3) };
   }
   return null;
 }
@@ -232,11 +135,16 @@ export function route(pathname) {
 export async function render(match, env, origin) {
   const cfg = await getConfig(env);
   if (match.kind === "tool") return shell(toolBody(match.data, cfg), match.data, cfg, origin, match.data.slug);
-  if (match.kind === "legal") return shell(legalBody(match.data), { title: match.data.title + " — " + cfg.brand.name, desc: match.data.desc, h1: match.data.title }, cfg, origin, match.slug);
-  if (match.kind === "bloglist") return shell(blogListBody(), { title: "Blog — Instagram tips and guides", desc: "Guides on downloading Instagram reels, videos and photos, and fixing the problems that come up.", h1: "Blog" }, cfg, origin, "blog");
-  if (match.kind === "post") return shell(postBody(match.data), { title: match.data.title, desc: match.data.desc, h1: match.data.title }, cfg, origin, "blog/" + match.data.slug);
+  if (match.kind === "legal") return shell(legalBody(match.data, cfg, match.slug), { title: match.data.title + " — " + cfg.brand.name, desc: match.data.desc, h1: match.data.title }, cfg, origin, match.slug);
+  if (match.kind === "bloglist") return shell(blogListBody(match.data), { title: "Blog — Instagram tips and guides", desc: "Guides on downloading Instagram reels, videos and photos, and fixing the problems that come up.", h1: "Blog" }, cfg, origin, "blog");
+  if (match.kind === "post") {
+    const d = match.data;
+    return shell(postBody(d, match.more, origin, cfg), { title: d.title, desc: d.desc, kw: d.kw, h1: d.title, image: d.cover ? abs(origin, d.cover) : "", article: true }, cfg, origin, "blog/" + d.slug);
+  }
   return null;
 }
+
+const abs = (origin, u) => (/^https?:/.test(u) ? u : origin + u);
 
 /* ===================== shell ===================== */
 
@@ -262,22 +170,22 @@ function shell(body, meta, cfg, origin, slug) {
 ${meta.kw ? `<meta name="keywords" content="${esc(meta.kw)}">` : ""}
 <link rel="canonical" href="${esc(canonical)}">
 ${gsc}
-<meta property="og:type" content="website">
+<meta property="og:type" content="${meta.article ? "article" : "website"}">
 <meta property="og:title" content="${esc(meta.title)}">
 <meta property="og:description" content="${esc(meta.desc)}">
 <meta property="og:url" content="${esc(canonical)}">
 <meta property="og:site_name" content="${esc(brand)}">
 <meta property="og:locale" content="en_US">
-<meta property="og:image" content="${origin}/og.jpg">
-<meta property="og:image:secure_url" content="${origin}/og.jpg">
+<meta property="og:image" content="${esc(meta.image || origin + "/og.jpg")}">
+<meta property="og:image:secure_url" content="${esc(meta.image || origin + "/og.jpg")}">
 <meta property="og:image:type" content="image/jpeg">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
+${meta.image ? "" : `<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">`}
 <meta property="og:image:alt" content="${esc(brand)} — Instagram video, reels, photo and IGTV downloader">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${esc(meta.title)}">
 <meta name="twitter:description" content="${esc(meta.desc)}">
-<meta name="twitter:image" content="${origin}/og.jpg">
+<meta name="twitter:image" content="${esc(meta.image || origin + "/og.jpg")}">
 <meta name="theme-color" content="#0a0a0f" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-title" content="${esc(brand)}">
@@ -388,39 +296,84 @@ ${adSlot(cfg, "native")}
 ${schema(t)}`;
 }
 
-function legalBody(d) {
+function legalBody(d, cfg, slug) {
+  const mail = (cfg.settings && cfg.settings.contactEmail) || "";
+  const form = slug !== "contact" ? "" : `
+  <form class="cform" id="cform" novalidate>
+    <div class="cgrid">
+      <label>Your name<input name="name" maxlength="80" autocomplete="name" required></label>
+      <label>Email<input name="email" type="email" maxlength="120" autocomplete="email" required></label>
+    </div>
+    <label>Topic<select name="topic">
+      <option>General question</option><option>Bug report</option><option>Business / advertising</option><option>Copyright (DMCA)</option><option>Feature request</option>
+    </select></label>
+    <label>Message<textarea name="msg" rows="6" maxlength="4000" required placeholder="If something did not download, include the link you used."></textarea></label>
+    <label class="hp" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+    <input type="hidden" name="t" value="${Date.now()}">
+    <button class="cbtn" type="submit">Send message</button>
+    <p class="cnote" id="cnote" role="status"></p>
+  </form>
+  ${mail ? `<p class="cmail">Prefer email? Write to <a href="mailto:${esc(mail)}">${esc(mail)}</a></p>` : ""}`;
   return `<section class="prose doc">
   <h1>${esc(d.title)}</h1>
-  <p class="updated">Last updated ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</p>
-  ${d.body.map((b) => `<h2>${esc(b[0])}</h2><p>${esc(b[1])}</p>`).join("")}
+  ${slug === "contact" ? "" : `<p class="updated">Last updated ${fmtDate(d.updated || "2026-11-21")}</p>`}
+  <div class="mdx">${md(d.md)}</div>
+  ${form}
 </section>`;
 }
 
-function blogListBody() {
+function fmtDate(s) {
+  const d = new Date(String(s) + "T00:00:00Z");
+  return isNaN(d) ? esc(s) : d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+}
+
+function blogListBody(list) {
   return `<section class="prose doc">
   <h1>Blog</h1>
   <p class="lead">Guides on saving Instagram content, and fixes for the problems that come up along the way.</p>
   <div class="postlist">
-  ${BLOG.map((b) => `<a class="postcard" href="/blog/${b.slug}"><h3>${esc(b.title)}</h3><p>${esc(b.desc)}</p><span>${esc(b.date)}</span></a>`).join("")}
+  ${list.map((b) => `<a class="postcard${b.cover ? " hasimg" : ""}" href="/blog/${b.slug}">${b.cover ? `<img src="${esc(b.cover)}" alt="" loading="lazy" decoding="async">` : ""}<div><h3>${esc(b.title)}</h3><p>${esc(b.desc)}</p><span>${fmtDate(b.date)} · ${Math.max(1, Math.round((b.words || 0) / 200))} min read</span></div></a>`).join("") || "<p>No posts yet.</p>"}
   </div>
 </section>`;
 }
 
-function postBody(p) {
-  return `<article class="prose doc">
+const ld = (o) => `<script type="application/ld+json">${JSON.stringify(o).replace(/</g, "\\u003c")}</script>`;
+
+function postBody(p, more, origin, cfg) {
+  const toc = headings(p.md);
+  const mins = Math.max(1, Math.round(plain(p.md).split(" ").length / 200));
+  const url = origin + "/blog/" + p.slug;
+  return `<article class="prose doc post">
+  <nav class="crumbs"><a href="/">Home</a> › <a href="/blog">Blog</a></nav>
   <h1>${esc(p.title)}</h1>
-  <p class="updated">${esc(p.date)}</p>
-  ${p.body.map((b) => `<h2>${esc(b[0])}</h2><p>${esc(b[1])}</p>`).join("")}
+  <p class="updated">${fmtDate(p.date)}${p.updated && p.updated !== p.date ? " · Updated " + fmtDate(p.updated) : ""} · ${mins} min read</p>
+  ${p.cover ? `<img class="pcover" src="${esc(p.cover)}" alt="${esc(p.title)}" decoding="async">` : ""}
+  ${toc.length >= 3 ? `<details class="toc" open><summary>In this guide</summary><ol>${toc.map((h) => `<li><a href="#${h.id}">${esc(h.text)}</a></li>`).join("")}</ol></details>` : ""}
+  <div class="mdx">${md(p.md)}</div>
   <div class="cta"><h3>Try it now</h3><p>Paste a link on the <a href="/">downloader</a> and save the file in a few seconds.</p></div>
+  ${more && more.length ? `<h2 class="morehd">Keep reading</h2><div class="postlist">${more.map((b) => `<a class="postcard" href="/blog/${b.slug}"><div><h3>${esc(b.title)}</h3><p>${esc(b.desc)}</p></div></a>`).join("")}</div>` : ""}
 </article>
-<script type="application/ld+json">${JSON.stringify({
+${ld({
     "@context": "https://schema.org",
     "@type": "BlogPosting",
     headline: p.title,
     description: p.desc,
     datePublished: p.date,
-    dateModified: p.date,
-  })}</script>`;
+    dateModified: p.updated || p.date,
+    mainEntityOfPage: url,
+    image: p.cover ? abs(origin, p.cover) : origin + "/og.jpg",
+    author: { "@type": "Organization", name: cfg.brand.name, url: origin },
+    publisher: { "@type": "Organization", name: cfg.brand.name, logo: { "@type": "ImageObject", url: origin + "/icon-512.png" } },
+  })}
+${ld({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: origin + "/" },
+      { "@type": "ListItem", position: 2, name: "Blog", item: origin + "/blog" },
+      { "@type": "ListItem", position: 3, name: p.title, item: url },
+    ],
+  })}`;
 }
 
 function schema(t) {
@@ -482,17 +435,18 @@ function adSlot(cfg, id, cls = "", wrapCls = "") {
 
 /* ===================== sitemap / robots ===================== */
 
-export function sitemap(origin) {
+export async function sitemap(origin, env) {
+  const posts = await listPosts(env);
   const urls = [
     ...Object.values(TOOLS).map((t) => ({ loc: origin + "/" + t.slug, p: t.slug ? "0.9" : "1.0" })),
-    { loc: origin + "/blog", p: "0.7" },
-    ...BLOG.map((b) => ({ loc: origin + "/blog/" + b.slug, p: "0.6" })),
-    ...Object.keys(LEGAL).map((k) => ({ loc: origin + "/" + k, p: "0.3" })),
+    { loc: origin + "/blog", p: "0.7", m: posts[0] && posts[0].updated },
+    ...posts.map((b) => ({ loc: origin + "/blog/" + b.slug, p: "0.6", m: b.updated || b.date })),
+    ...PAGE_KEYS.map((k) => ({ loc: origin + "/" + k, p: "0.3" })),
   ];
   const today = new Date().toISOString().slice(0, 10);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls.map((u) => `<url><loc>${u.loc.replace(/\/$/, "") || origin}</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>${u.p}</priority></url>`).join("\n")}
+${urls.map((u) => `<url><loc>${u.loc.replace(/\/$/, "") || origin}</loc><lastmod>${u.m || today}</lastmod><changefreq>weekly</changefreq><priority>${u.p}</priority></url>`).join("\n")}
 </urlset>`;
 }
 
@@ -683,6 +637,39 @@ h3{font-size:16px;font-weight:700}
 .updated{color:var(--mut);font-size:13px;margin-bottom:18px}
 .postlist{display:grid;gap:12px;margin-top:20px}
 .postcard{display:block;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;text-decoration:none}
+.postcard.hasimg{display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center;padding:12px}
+.postcard.hasimg img{width:120px;height:80px;object-fit:cover;border-radius:11px;display:block}
+@media(max-width:520px){.postcard.hasimg{grid-template-columns:1fr}.postcard.hasimg img{width:100%;height:auto;aspect-ratio:16/9}}
+.crumbs{font-size:13px;color:var(--mut);margin-bottom:12px}.crumbs a{color:var(--mut);text-decoration:none}.crumbs a:hover{color:var(--fg)}
+.pcover{width:100%;height:auto;border-radius:16px;margin:6px 0 20px;display:block;border:1px solid var(--line)}
+.toc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 16px;margin:4px 0 20px}
+.toc summary{font-weight:700;cursor:pointer;font-size:14.5px}
+.toc ol{margin:10px 0 2px 18px;display:grid;gap:5px}.toc a{color:var(--mut);font-size:14px;text-decoration:none}.toc a:hover{color:var(--fg)}
+.mdx h2{scroll-margin-top:80px}
+.mdx h3{font-size:17px;margin:20px 0 6px}
+.mdx p,.mdx li{color:var(--mut);font-size:15.5px;line-height:1.75}
+.mdx p{margin:0 0 14px}
+.mdx ul,.mdx ol{margin:0 0 16px 22px;display:grid;gap:6px}
+.mdx strong{color:var(--fg)}
+.mdx a{color:var(--a2);font-weight:600}
+.mdx blockquote{border-left:3px solid var(--a2);background:var(--card);border-radius:0 12px 12px 0;padding:12px 16px;margin:0 0 16px}
+.mdx blockquote p{margin:0}
+.mdx figure{margin:6px 0 18px}.mdx img{max-width:100%;height:auto;border-radius:14px;display:block}
+.mdx figcaption{font-size:13px;color:var(--mut);text-align:center;margin-top:7px}
+.mdx code{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.9em}
+.mdx hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+.morehd{margin-top:36px}
+.cform{margin-top:22px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;display:grid;gap:12px}
+.cform label{display:grid;gap:6px;font-size:13.5px;font-weight:600}
+.cform input,.cform select,.cform textarea{width:100%;font:inherit;font-size:15px;font-weight:400;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 13px;outline:none;transition:border-color .2s}
+.cform input:focus,.cform select:focus,.cform textarea:focus{border-color:var(--a2)}
+.cform textarea{resize:vertical;min-height:130px}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:560px){.cgrid{grid-template-columns:1fr}}
+.cform .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.cbtn{border:0;cursor:pointer;color:#fff;font:inherit;font-weight:700;font-size:15.5px;padding:13px 22px;border-radius:13px;background:var(--grad);justify-self:start}
+.cbtn[disabled]{opacity:.6;cursor:wait}
+.cnote{font-size:14px;margin:0;min-height:1em}.cnote.ok{color:#2bd97c}.cnote.bad{color:#f9377d}
+.cmail{margin-top:14px;font-size:14.5px}.cmail a{color:var(--a2);font-weight:600}
 .postcard p{margin-top:7px;font-size:14px}
 .postcard span{color:var(--mut);font-size:12.5px;display:block;margin-top:10px}
 .cta{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;margin-top:30px}
@@ -734,6 +721,17 @@ if(tb)tb.onclick=function(){
   }
 };
 
+var cf=document.getElementById('cform');
+if(cf)cf.onsubmit=function(e){
+  e.preventDefault();var n=document.getElementById('cnote'),b=cf.querySelector('.cbtn'),fd=new FormData(cf),o={};
+  fd.forEach(function(v,k){o[k]=v});
+  if(!o.name.trim()||!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email)||o.msg.trim().length<10){n.className='cnote bad';n.textContent='Please fill in your name, a valid email and a message of at least 10 characters.';return}
+  b.disabled=true;n.className='cnote';n.textContent='Sending...';
+  fetch('/api/contact',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o)}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){cf.reset();n.className='cnote ok';n.textContent='Thanks! Your message has been sent. We usually reply within a couple of days.'}
+    else{n.className='cnote bad';n.textContent=d.error||'Could not send right now. Please try again.'}
+  }).catch(function(){n.className='cnote bad';n.textContent='Could not send right now. Please check your connection.'}).then(function(){b.disabled=false});
+};
 var f=document.getElementById('f');if(!f)return;
 var u=document.getElementById('u'),go=document.getElementById('go'),out=document.getElementById('out');
 var goLabel=go.textContent;
