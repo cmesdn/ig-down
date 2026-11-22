@@ -68,6 +68,15 @@ self.addEventListener('push', function(event){
         { body: m.topic + ' — ' + m.snippet, icon: '/icon-192.png', badge: '/icon-192.png', tag: 'igto-msg', renotify: true, vibrate: [200, 120, 200], data: { url: '/admin?tab=msgs' } });
       if (st.level === 'ok') return;
     }
+    var bn2 = !st.alerts || st.alerts.lang !== 'en', shown = false, now = Date.now();
+    async function note(title, body, tag, url){ shown = true; await self.registration.showNotification(title, { body: body, icon: '/icon-192.png', badge: '/icon-192.png', tag: tag, renotify: true, vibrate: [180, 100, 180], data: { url: url } }); }
+    if (st.loginfail && now - st.loginfail.at < 180000)
+      await note(bn2 ? '⚠️ ভুল পাসওয়ার্ডে লগইনের চেষ্টা' : '⚠️ Wrong admin password attempts', st.loginfail.n + '× · ' + st.loginfail.ip + (st.loginfail.country ? ' (' + st.loginfail.country + ')' : ''), 'igto-login', '/admin?tab=settings');
+    if (st.drafts && now - st.drafts.at < 180000)
+      await note(bn2 ? '📝 ' + st.drafts.n + 'টা নতুন ড্রাফট পোস্ট' : '📝 ' + st.drafts.n + ' new draft posts', (st.drafts.titles || []).join(' · ') || (bn2 ? 'পড়ে পাবলিশ করুন' : 'Review and publish'), 'igto-drafts', '/admin?tab=blog');
+    if (st.report && now - st.report.at < 2100000)
+      await note(bn2 ? '📊 গতকালের রিপোর্ট' : '📊 Yesterday', (bn2 ? 'ভিজিটর ' : 'Visitors ') + st.report.visits + ' · ' + (bn2 ? 'ডাউনলোড ' : 'Downloads ') + st.report.downloads + (st.report.fails ? ' · ✕ ' + st.report.fails : ''), 'igto-report-' + st.report.day, '/admin?tab=visitors');
+    if (shown && st.level === 'ok') return;
     var txt = lineFor(st);
     var opts = {
       body: txt[1],

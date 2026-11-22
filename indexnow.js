@@ -6,6 +6,7 @@
 
 import { listPosts, savePost, slugOf } from "./content.js";
 import { notify } from "./store.js";
+import { pushAll } from "./push.js";
 
 export const SITE = "https://igtodownload.com";
 
@@ -84,7 +85,8 @@ export async function handleDrafts(request, env) {
   const made = out.filter((x) => x.result === "created");
   if (made.length) {
     await notify(env, "📝 " + made.length + " new draft post(s) are waiting in Admin → Blog:\n" + made.map((x) => "• " + x.slug).join("\n"));
-    await env.CONFIG.put("draftping", JSON.stringify({ n: made.length, at: Date.now() }));
+    await env.CONFIG.put("draftping", JSON.stringify({ n: made.length, at: Date.now(), titles: posts.filter((p) => made.some((m) => m.slug === slugOf(p.slug || p.title))).map((p) => p.title).slice(0, 5) }));
+    try { await pushAll(env); } catch (_) {}
   }
   return j({ ok: true, results: out });
 }

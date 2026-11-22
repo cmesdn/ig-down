@@ -9,6 +9,7 @@ import { handleAdmin } from "./admin.js";
 import { route, render, sitemap, robots, esc } from "./pages.js";
 import { handleContact } from "./cms.js";
 import { serveKeyFile, handleDrafts } from "./indexnow.js";
+import { handleApk } from "./adminx.js";
 import { ogImage, appIcon, icon192, icon512, iconMaskable } from "./assets.js";
 import { manifest, SW } from "./pwa.js";
 import { siteStatus } from "./monitor.js";
@@ -16,7 +17,9 @@ import { pushIfChanged, getVapid } from "./push.js";
 import { siteManifest, SITE_SW, handleShare } from "./app.js";
 import { subscribeUser, unsubscribeUser, latestBroadcast, countClick } from "./broadcast.js";
 import { logEvent } from "./store.js";
-import { track, pruneVisits } from "./visits.js";
+import { track } from "./visits.js";
+import { logDownload, autoPrune, daySummary, localDay, tzOff } from "./insights.js";
+import { pushAll } from "./push.js";
 
 const HITS = new Map(); // in-isolate rate limit: ip -> {n, reset}
 
@@ -126,6 +129,7 @@ export default {
         if (kf) return kf;
       }
       if (path === "/api/drafts") return await handleDrafts(request, env);
+      if (path === "/api/apk" || path.startsWith("/app-update/")) { const r = await handleApk(request, url, env); if (r) return r; }
 
       // Google Search Console ownership file (only this exact token — never a pattern)
       if (path === "/google844f16a261948d1a.html")
@@ -151,17 +155,25 @@ export default {
         if (cfg.settings.maintenance)
           return cors(json({ ok: false, title: "Back shortly", error: "The site is under maintenance. Please try again in a few minutes." }, 503));
 
+        const raw = (url.searchParams.get("url") || "").slice(0, 300);
+        const t0 = Date.now();
         const limited = rateLimit(request, cfg.settings.rateLimitPerHour);
-        if (limited) return cors(limited);
+        if (limited) { ctx.waitUntil(logDownload(env, request, { ok: false, url: raw, err: "rate limited" })); return cors(limited); }
 
-        const code = shortcode(url.searchParams.get("url") || "");
-        if (!code)
+        const code = shortcode(raw);
+        if (!code) {
+          ctx.waitUntil(logDownload(env, request, { ok: false, url: raw, err: "not an Instagram post link" }));
           return cors(json({ ok: false, title: "That link does not look right", error: "Open the post in Instagram, tap Share, then Copy link, and paste that here." }, 400));
+        }
 
         try {
           const data = await resolveMedia(code, env, ctx, { country: request.headers.get("CF-IPCountry") || "" });
+          const items = data.items || [];
+          ctx.waitUntil(logDownload(env, request, { ok: true, code, url: raw, n: items.length, ms: Date.now() - t0,
+            kind: items.length > 1 ? "carousel" : (items[0] && items[0].type) || "" }));
           return cors(json(data));
         } catch (e) {
+          ctx.waitUntil(logDownload(env, request, { ok: false, code, url: raw, ms: Date.now() - t0, err: e.message || "error" }));
           return cors(
             json(
               {
@@ -203,8 +215,21 @@ export default {
     ctx.waitUntil(
       (async () => {
         await healthCheck(env);
-        await prune(env);
-        await pruneVisits(env);
+        try { await autoPrune(env, await getConfig(env)); } catch (_) {}
+        // morning summary at 9 AM local time (once a day)
+        try {
+          const cfg = await getConfig(env);
+          const off = tzOff(cfg);
+          const localHour = new Date(Date.now() + off * 3600e3).getUTCHours();
+          const today = localDay(Date.now(), off);
+          if (cfg.alerts.dailyReport !== false && localHour === 9 && (await env.CONFIG.get("dailyreport_day")) !== today) {
+            await env.CONFIG.put("dailyreport_day", today);
+            const y = localDay(Date.now() - 864e5, off);
+            const s = await daySummary(env, cfg, y);
+            await env.CONFIG.put("dailyreport", JSON.stringify(Object.assign(s, { at: Date.now() })));
+            await pushAll(env);
+          }
+        } catch (_) {}
         // decide whether the phone needs to buzz
         try {
           const cfg = await getConfig(env);

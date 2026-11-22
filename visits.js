@@ -55,6 +55,8 @@ function source(ref, host) {
   return "other";
 }
 
+import { isMe, initInsights } from "./insights.js";
+
 export async function track(env, request, body) {
   if (!env.STATS || !body) return;
   const ua = request.headers.get("user-agent") || "";
@@ -64,6 +66,8 @@ export async function track(env, request, body) {
   if (!t || !/^[a-z0-9]{8,40}$/.test(sid)) return;
 
   await init(env);
+  await initInsights(env);
+  const me = (await isMe(env, body.m)) ? 1 : 0;
   const now = Date.now();
   const d = new Date(now);
   const path = String(body.p || "/").slice(0, 80);
@@ -73,16 +77,16 @@ export async function track(env, request, body) {
 
   const stmts = [
     env.STATS.prepare(
-      "INSERT INTO presence (sid, last, path, country, device, app) VALUES (?,?,?,?,?,?) " +
-        "ON CONFLICT(sid) DO UPDATE SET last=excluded.last, path=excluded.path"
-    ).bind(sid, now, path, country, dev, app),
+      "INSERT INTO presence (sid, last, path, country, device, app, me) VALUES (?,?,?,?,?,?,?) " +
+        "ON CONFLICT(sid) DO UPDATE SET last=excluded.last, path=excluded.path, me=excluded.me"
+    ).bind(sid, now, path, country, dev, app, me),
   ];
   if (t === "view") {
     const host = new URL(request.url).hostname.replace(/^www\./, "");
     stmts.push(
       env.STATS.prepare(
-        "INSERT INTO visits (ts, day, hour, sid, path, country, device, src, app) VALUES (?,?,?,?,?,?,?,?,?)"
-      ).bind(now, d.toISOString().slice(0, 10), d.getUTCHours(), sid, path, country, dev, source(String(body.r || ""), host), app)
+        "INSERT INTO visits (ts, day, hour, sid, path, country, device, src, app, me) VALUES (?,?,?,?,?,?,?,?,?,?)"
+      ).bind(now, d.toISOString().slice(0, 10), d.getUTCHours(), sid, path, country, dev, source(String(body.r || ""), host), app, me)
     );
   }
   if (env.STATS.batch) await env.STATS.batch(stmts);
@@ -101,6 +105,7 @@ export async function liveNow(env) {
     const one = async (sql) => ((await env.STATS.prepare(sql).bind(since).first()) || {}).n || 0;
     return {
       now: await one("SELECT COUNT(*) n FROM presence WHERE last > ?"),
+      me: await one("SELECT COUNT(*) n FROM presence WHERE last > ? AND me=1"),
       app: await one("SELECT COUNT(*) n FROM presence WHERE last > ? AND app=1"),
       countries: await all("SELECT country k, COUNT(*) n FROM presence WHERE last > ? AND country!='' GROUP BY country ORDER BY n DESC LIMIT 8"),
       pages: await all("SELECT path k, COUNT(*) n FROM presence WHERE last > ? GROUP BY path ORDER BY n DESC LIMIT 8"),

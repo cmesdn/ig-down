@@ -275,10 +275,23 @@ function ev(k, extra){
    closes). One beacon on load, then a light heartbeat every two minutes
    while the page is visible, for at most half an hour. */
 var SID = (function(){ try { var s = sessionStorage.getItem('igto_sid'); if (!s) { s = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24); sessionStorage.setItem('igto_sid', s); } return s; } catch (e) { return ''; } })();
+/* the owner can mark his own browsers (link from the admin panel) so his visits can be left out of the numbers */
+var ME = (function(){
+  try {
+    var q = new URLSearchParams(location.search), v = q.get('me');
+    if (v) {
+      if (v === 'off') localStorage.removeItem('igto_me'); else if (/^[a-f0-9]{16,64}$/.test(v)) localStorage.setItem('igto_me', v);
+      q.delete('me'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash);
+      setTimeout(function(){ alert(v === 'off' ? 'This browser is no longer marked as the owner.' : 'This browser is now marked as you (the owner). Your visits can be hidden in the admin stats.'); }, 400);
+    }
+    return localStorage.getItem('igto_me') || '';
+  } catch (e) { return ''; }
+})();
+window.__ME = ME;
 function presence(t){
   if (!SID) return;
   try {
-    var body = JSON.stringify({ t: t, s: SID, p: location.pathname, r: t === 'view' ? document.referrer : '', a: standalone ? 1 : 0 });
+    var body = JSON.stringify({ t: t, s: SID, p: location.pathname, r: t === 'view' ? document.referrer : '', a: standalone ? 1 : 0, m: ME });
     if (navigator.sendBeacon) navigator.sendBeacon('/api/p', new Blob([body], { type: 'application/json' }));
     else fetch('/api/p', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body, keepalive: true });
   } catch (e) {}

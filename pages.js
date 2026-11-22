@@ -782,7 +782,7 @@ f.onsubmit=function(e){
  var link=(u.value||'').trim(); if(!link) return;
  go.disabled=true; go.innerHTML='<span class="spin"></span>';
  out.innerHTML='<div class="skel"></div>';
- fetch('/api/resolve?url='+encodeURIComponent(link))
+ fetch('/api/resolve?url='+encodeURIComponent(link),{headers:{'x-me':window.__ME||'','x-app':(matchMedia('(display-mode: standalone)').matches?'1':'0')}})
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d.ok){out.innerHTML='<div class="err"><b>'+esc(d.title||'Could not get that one')+'</b>'+esc(d.error||'')+'</div>';return}

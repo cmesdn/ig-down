@@ -12,6 +12,9 @@ import { liveNow, report, resetData } from "./visits.js";
 import { flushAll } from "./store.js";
 import { esc } from "./pages.js";
 import { cmsApi, blogTab, msgsTab, inbox, clearMessages, CMS_CSS, CMS_JS } from "./cms.js";
+import { apiX, extraStatus, summaryBox, visitorsTab2, historyTab, extrasForSettings, XCSS, XJS } from "./adminx.js";
+import { pushAll as pushAllX } from "./push.js";
+import { notify as notifyX } from "./store.js";
 
 const SESSION_HOURS = 24;
 const TRIES = new Map();
@@ -23,7 +26,7 @@ const L = {
     admin: "এডমিন", signout: "সাইন আউট", signin: "সাইন ইন", password: "পাসওয়ার্ড",
     wrongpw: "ভুল পাসওয়ার্ড।", toomany: "অনেকবার ভুল হয়েছে। কয়েক মিনিট পর আবার চেষ্টা করুন।",
     guide: "📖 গাইড দেখুন", save: "সেভ করুন",
-    tabs: { msgs: "মেসেজ", blog: "ব্লগ ও পেজ", monitor: "লাইভ", visitors: "ভিজিটর", home: "ড্যাশবোর্ড", users: "নোটিফিকেশন", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
+    tabs: { history: "ডাউনলোড হিস্টরি", msgs: "মেসেজ", blog: "ব্লগ ও পেজ", monitor: "লাইভ", visitors: "ভিজিটর", home: "ড্যাশবোর্ড", users: "নোটিফিকেশন", cookies: "কুকি", ads: "অ্যাড", seo: "SEO", settings: "সেটিংস", diag: "ডায়াগনস্টিক", help: "সাহায্য" },
 
     a_nocookie: "এখনো কোনো সেশন কুকি নেই। কুকি ট্যাবে গিয়ে একটা যোগ করুন, নইলে কোনো ডাউনলোড হবে না।",
     a_alldead: "সব কুকি মৃত। সাইট এখন কিছুই ডাউনলোড করতে পারছে না। কুকি ট্যাবে নতুন sessionid যোগ করুন।",
@@ -110,7 +113,7 @@ const L = {
     admin: "admin", signout: "Sign out", signin: "Sign in", password: "Password",
     wrongpw: "Wrong password.", toomany: "Too many attempts. Try again in a few minutes.",
     guide: "📖 Show guide", save: "Save",
-    tabs: { msgs: "Messages", blog: "Blog & pages", monitor: "Live", visitors: "Visitors", home: "Dashboard", users: "Notify", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
+    tabs: { history: "History", msgs: "Messages", blog: "Blog & pages", monitor: "Live", visitors: "Visitors", home: "Dashboard", users: "Notify", cookies: "Cookies", ads: "Ads", seo: "SEO", settings: "Settings", diag: "Diagnostics", help: "Help" },
 
     a_nocookie: "No session cookies yet. Downloads will fail until you add one in the Cookies tab.",
     a_alldead: "Every cookie is dead. The site cannot download anything right now. Add a fresh sessionid in the Cookies tab.",
@@ -243,6 +246,15 @@ export async function handleAdmin(request, url, env, ctx) {
     }
     const n = ((tr && tr.n) || 0) + 1;
     TRIES.set(ip, { n, until: n >= 5 ? Date.now() + 9e5 : 0 });
+    if (n === 3 || n === 5) {
+      // someone keeps typing wrong passwords: tell the owner's phone and Telegram
+      try {
+        const country = request.headers.get("CF-IPCountry") || "";
+        await env.CONFIG.put("loginfail", JSON.stringify({ at: Date.now(), ip, country, n }));
+        await notifyX(env, "⚠️ " + n + " wrong admin password attempts from " + ip + (country ? " (" + country + ")" : ""));
+        await pushAllX(env);
+      } catch (_) {}
+    }
     return page(loginForm(t.wrongpw, t, lang), true);
   }
 
@@ -263,6 +275,10 @@ export async function handleAdmin(request, url, env, ctx) {
 /* ===================== json api ===================== */
 
 async function handleApi(api, request, url, env, lang) {
+  if (/^x_/.test(api)) {
+    const r = await apiX(api, request, url, env, lang);
+    if (r) return r;
+  }
   if (/^(cms_|msg_)/.test(api)) {
     const r = await cmsApi(api, request, url, env, lang);
     if (r) return r;
@@ -272,7 +288,7 @@ async function handleApi(api, request, url, env, lang) {
     case "pubstatus": {
       const st = await siteStatus(env);
       st.liveNow = (await liveNow(env)).now;
-      Object.assign(st, await inbox(env));
+      Object.assign(st, await inbox(env), await extraStatus(env));
       st.line = statusLine(st, (st.alerts && st.alerts.lang) || lang);
       return json(st);
     }
@@ -529,18 +545,23 @@ async function body(tab, env, msg, lang) {
   const cfg = await getConfig(env);
   const cookies = await getCookies(env);
   const live = cookies.filter((c) => c.status !== "dead").length;
-  const order = ["monitor", "visitors", "users", "msgs", "blog", "cookies", "ads", "seo", "settings", "diag", "help"];
+  const order = ["monitor", "visitors", "history", "users", "msgs", "blog", "cookies", "ads", "seo", "settings", "diag", "help"];
   const ib = await inbox(env);
 
   let alert = "";
-  if (!cookies.length) alert = bad(t.a_nocookie);
-  else if (!live) alert = bad(t.a_alldead);
-  else if (live < 2) alert = mid(t.a_one);
+  const pwDefault = !(await env.CONFIG.get("adminpw")) && !env.ADMIN_PASSWORD;
+  // cookie warnings only where they can be acted on
+  if (tab === "monitor" || tab === "cookies") {
+    if (!cookies.length) alert = bad(t.a_nocookie);
+    else if (!live) alert = bad(t.a_alldead);
+    else if (live < 2) alert = mid(t.a_one);
+  }
   if (cfg.settings.maintenance) alert += bad(t.a_maint);
 
   const panes = {
-    monitor: () => monitorTab(cfg, t, lang),
-    visitors: () => visitorsTab(lang),
+    monitor: () => summaryBox(lang) + (pwDefault ? mid(lang === "en" ? "You are still using the default password. Change it in Settings → Password — anyone who knows it can control the site." : "এখনো আসল (ডিফল্ট) পাসওয়ার্ড চলছে। সেটিংস → পাসওয়ার্ড থেকে এখনই বদলান — এটা জানলে যে কেউ সাইট নিয়ন্ত্রণ করতে পারবে।") : "") + monitorTab(cfg, t, lang),
+    visitors: () => visitorsTab2(lang),
+    history: () => historyTab(lang),
     users: () => usersTab(env, cfg, t, lang),
     msgs: () => msgsTab(lang),
     blog: () => blogTab(lang),
@@ -548,7 +569,7 @@ async function body(tab, env, msg, lang) {
     cookies: () => cookiesTab(cookies, t),
     ads: () => adsTab(cfg, t, lang),
     seo: () => seoTab(cfg, t, lang),
-    settings: () => settingsTab(cfg, t),
+    settings: () => settingsTab(cfg, t) + extrasForSettings(lang),
     diag: async () => diagTab(t, lang) + (await opsBox(env, t)),
     help: () => helpTab(lang),
   };
@@ -1378,9 +1399,9 @@ function page(inner, bare, lang) {
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <title>Admin — IGtoDownload</title>
-<style>${ACSS}${CMS_CSS}</style></head>
+<style>${ACSS}${CMS_CSS}${XCSS}</style></head>
 <body class="${bare ? "bare" : ""}"><div class="wrap">${inner}</div>
-<script>${AJS}</script><script>${CMS_JS}</script></body></html>`,
+<script>${AJS}</script><script>${CMS_JS}</script><script>${XJS}</script></body></html>`,
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } }
   );
 }
