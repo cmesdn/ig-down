@@ -640,6 +640,18 @@ color:#fff;font-size:11.5px;font-weight:600;padding:5px 13px;border-radius:20px;
 .dlall.pulse{animation:dlp 1.4s ease-in-out 3}
 @keyframes dlp{50%{transform:scale(1.03);box-shadow:0 0 0 6px rgba(249,55,125,.25)}}
 .dlall[disabled]{opacity:.85;cursor:wait}
+.iab{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 0 12px;padding:12px 14px;border-radius:14px;background:rgba(249,55,125,.10);border:1px solid rgba(249,55,125,.35);font-size:13.5px;line-height:1.4}
+.iab b{display:block;font-size:14px}.iab small{display:block;color:var(--mut);margin-top:3px;font-size:12.5px}
+.iabgo{flex:none;display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:11px;background:linear-gradient(135deg,var(--a1,#f9377d),var(--a2,#8b3dff));color:#fff;font-weight:700;text-decoration:none;font-size:14px}
+.svm{position:fixed;inset:0;z-index:999;background:rgba(6,6,10,.78);backdrop-filter:blur(6px);display:grid;place-items:center;padding:16px}
+.svc{position:relative;width:min(420px,100%);max-height:92vh;overflow:auto;background:var(--bg,#111);border:1px solid var(--line);border-radius:18px;padding:18px 16px 16px;text-align:center}
+.svc h4{margin:0 26px 12px;font-size:15.5px;line-height:1.35}
+.svc img,.svc video{display:block;width:100%;max-height:52vh;object-fit:contain;border-radius:12px;background:#000;margin-bottom:12px;-webkit-touch-callout:default}
+.svc .iabgo{width:100%}.svc p{font-size:12.5px;color:var(--mut);margin:10px 0 0;line-height:1.45}
+.svx{position:absolute;top:8px;right:8px;width:34px;height:34px;border-radius:50%;border:0;background:var(--bg2);color:var(--fg);font-size:22px;line-height:1;cursor:pointer}
+.iost{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:998;width:min(440px,calc(100% - 24px));background:var(--bg2,#1b1b22);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:12px 40px 12px 14px;font-size:13px;line-height:1.45;box-shadow:0 10px 30px rgba(0,0,0,.35);animation:iosu .35s ease}
+.iost b{display:block;font-size:14px;margin-bottom:2px}.iost .svx{top:6px;right:6px;width:28px;height:28px;font-size:18px}
+@keyframes iosu{from{opacity:0;transform:translate(-50%,14px)}}
 .glist{display:grid;gap:7px}
 .gli{display:grid;grid-template-columns:48px 1fr auto;gap:11px;align-items:center;text-decoration:none;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:13px;padding:7px 13px 7px 7px;transition:border-color .2s,transform .15s}
 .gli:active{transform:scale(.98)}
@@ -804,6 +816,44 @@ if(pb)pb.onclick=function(){
 
 var q=new URLSearchParams(location.search).get('url');
 var SHARED=/[?&]source=share/.test(location.search), autoDl=SHARED;
+var UA=navigator.userAgent||'';
+var IOS=/iP(hone|ad|od)/.test(UA)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+var INAPP=/Instagram|FBAN|FBAV|FB_IAB|FBIOS|Messenger|musical_ly|BytedanceWebview|Snapchat/i.test(UA);
+var APPNAME=/Instagram/i.test(UA)?'Instagram':/FBAN|FBAV|FB_IAB|FBIOS|Messenger/i.test(UA)?'Facebook':'in-app';
+var EXT=IOS?'Safari':'Chrome';
+function extUrl(){
+ var v=(u.value||'').trim(), path='/'+(v?'?url='+encodeURIComponent(v):'');
+ if(IOS)return 'x-safari-https://'+location.host+path;
+ return 'intent://'+location.host+path+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(location.origin+path)+';end';
+}
+function openExt(e){if(e)e.preventDefault();if(window.gtag)gtag('event','open_external');location.href=extUrl()}
+if(INAPP){
+ var bar=document.createElement('div');bar.className='iab';
+ bar.innerHTML='<div><b>'+APPNAME+'&#39;s browser blocks downloads</b><small>Open this page in '+EXT+' to save files. Or tap &#8943; at the top right &rarr; <b style="display:inline;font-size:inherit">Open in external browser</b>.</small></div><a class="iabgo" href="#">Open in '+EXT+'</a>';
+ bar.querySelector('.iabgo').onclick=openExt;
+ f.parentNode.insertBefore(bar,f);
+}
+function saveSheet(x){
+ var m=document.createElement('div');m.className='svm';
+ var img=x.type==='image';
+ m.innerHTML='<div class="svc"><button class="svx" aria-label="Close">&times;</button><h4>'+(img?'Press and hold the photo &rarr; Save to Photos':'Press and hold isn&#39;t available for videos here &mdash; open in '+EXT+' to download')+'</h4>'+
+  (img?'<img src="'+x.url+'" alt="">':'<video src="'+(x.play||x.url)+'" controls playsinline muted preload="metadata"></video>')+
+  '<a class="iabgo" href="#">Open in '+EXT+' &amp; download</a><p>Not opening? Tap &#8943; at the top right of '+APPNAME+' &rarr; <b>Open in external browser</b>, then tap Download again.</p></div>';
+ function close(){m.remove()}
+ m.querySelector('.svx').onclick=close;
+ m.addEventListener('click',function(e){if(e.target===m)close()});
+ m.querySelector('.iabgo').onclick=openExt;
+ document.body.appendChild(m);
+ if(window.gtag)gtag('event','inapp_block',{type:x.type});
+}
+var tipShown=false;
+function iosTip(x){
+ if(tipShown||!IOS||INAPP)return;tipShown=true;
+ var t=document.createElement('div');t.className='iost';
+ t.innerHTML='<button class="svx" aria-label="Close">&times;</button><b>Saved to Files &rarr; Downloads</b>To add it to Photos: open the <b style="display:inline;font-size:inherit">Files</b> app &rarr; Downloads &rarr; tap the '+(x&&x.type==='image'?'photo':'video')+' &rarr; Share &rarr; <b style="display:inline;font-size:inherit">Save '+(x&&x.type==='image'?'Image':'Video')+'</b>.';
+ t.querySelector('.svx').onclick=function(){t.remove()};
+ document.body.appendChild(t);setTimeout(function(){if(t.parentNode)t.remove()},12000);
+}
 if(q){u.value=q;setTimeout(function(){f.requestSubmit?f.requestSubmit():f.dispatchEvent(new Event('submit',{cancelable:true}))},SHARED?0:180)}
 
 f.onsubmit=function(e){
@@ -913,7 +963,12 @@ function wire(d){
    cm.textContent=open?'Show less':'Show more';
  };
  var links=out.querySelectorAll('a.dl,a.gli');
- for(var i=0;i<links.length;i++)links[i].addEventListener('click',function(){if(window.gtag)gtag('event','download_click')});
+ for(var i=0;i<links.length;i++)links[i].addEventListener('click',function(e){
+   var a=e.currentTarget, sl=a.closest('.gslide'), k=a.dataset.k!=null?+a.dataset.k:sl?+sl.dataset.i:0, x=d.items[k]||d.items[0];
+   if(IOS&&INAPP){e.preventDefault();saveSheet(x);return}
+   if(window.gtag)gtag('event','download_click');
+   iosTip(x);
+ });
 
  var tr=document.getElementById('gtrack'); if(!tr) return;
  var dots=out.querySelectorAll('.gdots button'), N=dots.length, cur=0;
@@ -935,6 +990,8 @@ function wire(d){
  Array.prototype.forEach.call(out.querySelectorAll('a.gli'),function(a){a.addEventListener('mouseenter',function(){},{passive:true})});
  var all=document.getElementById('dlall');
  if(all)all.onclick=function(){
+   if(IOS&&INAPP){saveSheet(d.items[0]);return}
+   iosTip(d.items[0]);
    if(all.disabled)return; all.disabled=true;
    var lb=all.querySelector('.lbl'), base=lb.innerHTML, k=0;
    (function next(){
