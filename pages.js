@@ -253,8 +253,7 @@ function toolBody(t, cfg) {
   <p class="trust">Free · No login · No watermark · Original quality</p>
 </section>
 ${adSlot(cfg, "under_input")}
-<div id="out"></div>
-${adSlot(cfg, "above_result", "", "slot-above-result")}
+${lateSlot(cfg, "above_result")}<div id="out"></div>${lateSlot(cfg, "below_result")}
 <section class="prose">
   <p class="lead">${esc(t.intro)}</p>
 </section>
@@ -340,6 +339,15 @@ function blogListBody(list) {
 
 const ld = (o) => `<script type="application/ld+json">${JSON.stringify(o).replace(/</g, "\\u003c")}</script>`;
 
+function midAd(html, cfg) {
+  const ad = adSlot(cfg, "in_content");
+  if (!ad) return html;
+  const parts = html.split(/(?=<h2)/);
+  if (parts.length < 4) return html + ad;
+  parts.splice(2, 0, ad);
+  return parts.join("");
+}
+
 function postBody(p, more, origin, cfg) {
   const toc = headings(p.md);
   const mins = Math.max(1, Math.round(plain(p.md).split(" ").length / 200));
@@ -350,7 +358,8 @@ function postBody(p, more, origin, cfg) {
   <p class="updated">${fmtDate(p.date)}${p.updated && p.updated !== p.date ? " · Updated " + fmtDate(p.updated) : ""} · ${mins} min read</p>
   ${p.cover ? `<img class="pcover" src="${esc(p.cover)}" alt="${esc(p.title)}" decoding="async">` : ""}
   ${toc.length >= 3 ? `<details class="toc" open><summary>In this guide</summary><ol>${toc.map((h) => `<li><a href="#${h.id}">${esc(h.text)}</a></li>`).join("")}</ol></details>` : ""}
-  <div class="mdx">${md(p.md)}</div>
+  <div class="mdx">${midAd(md(p.md), cfg)}</div>
+  ${adSlot(cfg, "sidebar", "", "only-desktop")}
   <div class="cta"><h3>Try it now</h3><p>Paste a link on the <a href="/">downloader</a> and save the file in a few seconds.</p></div>
   ${more && more.length ? `<h2 class="morehd">Keep reading</h2><div class="postlist">${more.map((b) => `<a class="postcard" href="/blog/${b.slug}"><div><h3>${esc(b.title)}</h3><p>${esc(b.desc)}</p></div></a>`).join("")}</div>` : ""}
 </article>
@@ -425,6 +434,13 @@ function appConfig(cfg) {
 }
 
 /* ===================== ads ===================== */
+
+/** Slots that only make sense after a download: sent as an inert <template>,
+ *  turned into a live ad (scripts and all) when the first result appears. */
+function lateSlot(cfg, id) {
+  const html = adSlot(cfg, id);
+  return html ? `<template class="adlate" data-slot="${id}">${html}</template>` : "";
+}
 
 function adSlot(cfg, id, cls = "", wrapCls = "") {
   if (!cfg.settings.adsEnabled) return "";
@@ -713,7 +729,6 @@ h3{font-size:16px;font-weight:700}
 .sticky-bottom{position:fixed;left:0;right:0;bottom:0;margin:0;background:var(--card);border-top:1px solid var(--line);padding:5px 0;z-index:50}
 .only-mobile{display:none}
 @media(max-width:700px){.only-mobile{display:block}.only-desktop{display:none}}
-.slot-above-result:empty{display:none}
 /* footer */
 footer{border-top:1px solid var(--line);margin-top:50px;padding:34px 18px 42px;background:var(--bg2)}
 .fcols{max-width:860px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
@@ -753,6 +768,17 @@ if(tb)tb.onclick=function(){
   }
 };
 
+function lateAds(){
+  var ts=document.querySelectorAll('template.adlate');
+  for(var i=0;i<ts.length;i++){(function(t){
+    var frag=t.content.cloneNode(true), box=document.createElement('div');
+    box.appendChild(frag);
+    var ss=box.querySelectorAll('script');
+    for(var k=0;k<ss.length;k++){var o=ss[k],n=document.createElement('script');for(var a=0;a<o.attributes.length;a++)n.setAttribute(o.attributes[a].name,o.attributes[a].value);n.text=o.text;o.parentNode.replaceChild(n,o)}
+    while(box.firstChild)t.parentNode.insertBefore(box.firstChild,t);
+    t.remove();
+  })(ts[i])}
+}
 var cf=document.getElementById('cform');
 if(cf)cf.onsubmit=function(e){
   e.preventDefault();var n=document.getElementById('cnote'),b=cf.querySelector('.cbtn'),fd=new FormData(cf),o={};
@@ -788,6 +814,7 @@ f.onsubmit=function(e){
     if(!d.ok){out.innerHTML='<div class="err"><b>'+esc(d.title||'Could not get that one')+'</b>'+esc(d.error||'')+'</div>';return}
     draw(d);
     try{document.dispatchEvent(new CustomEvent('igto:resolved',{detail:d}))}catch(x){}
+    lateAds();
     if(window.gtag)gtag('event','download_resolved',{method:d.via});
   })
   .catch(function(){out.innerHTML='<div class="err"><b>Network problem</b>Check your connection and try again.</div>'})
