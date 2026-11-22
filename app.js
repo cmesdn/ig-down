@@ -139,7 +139,7 @@ self.addEventListener('notificationclick', function(e){
  * Runs before first paint. Only flags the document when running as an
  * installed app; in a normal browser it does nothing at all.
  */
-export const APP_HEAD = `<script>(function(){try{var s=window.matchMedia&&matchMedia('(display-mode: standalone)').matches||navigator.standalone;if(!s)return;var d=document.documentElement;d.classList.add('app');if(sessionStorage.getItem('igto_run'))return;sessionStorage.setItem('igto_run','1');var k='igto_launch';var n=+(localStorage.getItem(k)||0);d.classList.add('splash-on',n?'again':'first');localStorage.setItem(k,String(n+1))}catch(e){}})()</script>`;
+export const APP_HEAD = `<script>(function(){try{var s=window.matchMedia&&matchMedia('(display-mode: standalone)').matches||navigator.standalone;if(!s)return;var d=document.documentElement;d.classList.add('app');if(sessionStorage.getItem('igto_run'))return;sessionStorage.setItem('igto_run','1');if(/[?&]source=share/.test(location.search))return;var k='igto_launch';var n=+(localStorage.getItem(k)||0);d.classList.add('splash-on',n?'again':'first');localStorage.setItem(k,String(n+1))}catch(e){}})()</script>`;
 
 /* ===================== splash markup ===================== */
 

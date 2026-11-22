@@ -637,6 +637,8 @@ color:#fff;font-size:11.5px;font-weight:600;padding:5px 13px;border-radius:20px;
 .gsum{text-align:center;font-size:12.5px;color:var(--mut);padding:2px 12px 12px}
 .nothumb{width:100%;height:240px;display:grid;place-items:center;color:var(--mut)}.nothumb svg{width:34px;height:34px}
 .dlall{border:0;cursor:pointer;font:inherit;font-weight:700;width:100%}
+.dlall.pulse{animation:dlp 1.4s ease-in-out 3}
+@keyframes dlp{50%{transform:scale(1.03);box-shadow:0 0 0 6px rgba(249,55,125,.25)}}
 .dlall[disabled]{opacity:.85;cursor:wait}
 .glist{display:grid;gap:7px}
 .gli{display:grid;grid-template-columns:48px 1fr auto;gap:11px;align-items:center;text-decoration:none;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:13px;padding:7px 13px 7px 7px;transition:border-color .2s,transform .15s}
@@ -801,7 +803,8 @@ if(pb)pb.onclick=function(){
 };
 
 var q=new URLSearchParams(location.search).get('url');
-if(q){u.value=q;setTimeout(function(){f.requestSubmit?f.requestSubmit():f.dispatchEvent(new Event('submit',{cancelable:true}))},180)}
+var SHARED=/[?&]source=share/.test(location.search), autoDl=SHARED;
+if(q){u.value=q;setTimeout(function(){f.requestSubmit?f.requestSubmit():f.dispatchEvent(new Event('submit',{cancelable:true}))},SHARED?0:180)}
 
 f.onsubmit=function(e){
  e.preventDefault();
@@ -880,6 +883,11 @@ function draw(d){
 
  out.innerHTML=h;
  wire(d);
+ /* opened by sharing from Instagram: start the download straight away (once) */
+ if(autoDl){autoDl=false;
+   if(!multi){var a1=out.querySelector('a.dl');if(a1){a1.click();var lb=a1.querySelector('.lbl');if(lb){var o=lb.innerHTML;lb.innerHTML='<span class="spin"></span> Downloading…';setTimeout(function(){lb.innerHTML=o},3500)}}}
+   else{var all=document.getElementById('dlall');if(all)all.classList.add('pulse')}
+ }
  out.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 
