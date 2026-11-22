@@ -150,7 +150,7 @@ async function decorate(media, code, env) {
   for (let i = 0; i < media.items.length; i++) {
     const it = media.items[i];
     const ext = it.type === "image" ? ".jpg" : ".mp4";
-    const name = "igtodownload-" + code + (media.items.length > 1 ? "-" + (i + 1) : "") + ext;
+    const name = "igtodownload.com_" + code + (media.items.length > 1 ? "-" + (i + 1) : "") + ext;
     items.push({
       type: it.type,
       width: it.width || null,
@@ -507,7 +507,8 @@ export async function handleDownload(request, url, env) {
   });
   if (!upstream.ok && upstream.status !== 206) return new Response("upstream " + upstream.status, { status: 502 });
 
-  const name = (url.searchParams.get("n") || "video.mp4").replace(/[^\w.\-]/g, "");
+  let name = (url.searchParams.get("n") || "video.mp4").replace(/[^\w.\-]/g, "");
+  if (!name.startsWith("igtodownload.com")) name = "igtodownload.com_" + name.replace(/^igtodownload-/, "");
   const h = new Headers();
   h.set("content-type", name.endsWith(".jpg") ? "image/jpeg" : "video/mp4");
   h.set("content-disposition", 'attachment; filename="' + name + '"');
