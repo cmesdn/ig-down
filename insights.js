@@ -8,6 +8,9 @@
  * Dates are the owner's local dates (Asia/Dhaka, UTC+6, unless changed in settings).
  */
 
+import { isDatacenter } from "./visits.js";
+const BOT_UA = /bot|crawl|spider|slurp|headless|inspectiontool|python|curl|wget|axios|node-fetch|undici|go-http|okhttp|java\/|scrapy|puppeteer|playwright|selenium/i;
+
 let READY = false;
 export async function initInsights(env) {
   if (READY || !env.STATS) return;
@@ -21,6 +24,10 @@ export async function initInsights(env) {
   await ex("ALTER TABLE visits ADD COLUMN me INTEGER DEFAULT 0");
   await ex("ALTER TABLE presence ADD COLUMN me INTEGER DEFAULT 0");
   await ex("CREATE INDEX IF NOT EXISTS idx_visits_ts ON visits (ts)");
+  await ex("ALTER TABLE visits ADD COLUMN vid TEXT");
+  await ex("ALTER TABLE visits ADD COLUMN bot INTEGER DEFAULT 0");
+  await ex("ALTER TABLE presence ADD COLUMN bot INTEGER DEFAULT 0");
+  await ex("ALTER TABLE dlog ADD COLUMN bot INTEGER DEFAULT 0");
   READY = true;
 }
 
@@ -79,12 +86,13 @@ export async function logDownload(env, request, row) {
     const ua = request.headers.get("user-agent") || "";
     const d = uaInfo(ua);
     const me = (await isMe(env, request.headers.get("x-me") || "")) ? 1 : 0;
+    const bot = me ? 0 : BOT_UA.test(ua) || isDatacenter(request.cf) ? 1 : 0;
     await env.STATS.prepare(
-      "INSERT INTO dlog (ts, ok, code, url, kind, n, err, ip, device, ua, country, me, app, ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO dlog (ts, ok, code, url, kind, n, err, ip, device, ua, country, me, app, ms, bot) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(
       Date.now(), row.ok ? 1 : 0, String(row.code || "").slice(0, 40), String(row.url || "").slice(0, 300), row.kind || "", row.n || 0,
       String(row.err || "").slice(0, 160), request.headers.get("CF-Connecting-IP") || "", d.kind, d.text,
-      (request.headers.get("CF-IPCountry") || "").slice(0, 2), me, request.headers.get("x-app") === "1" ? 1 : 0, row.ms || 0
+      (request.headers.get("CF-IPCountry") || "").slice(0, 2), me, request.headers.get("x-app") === "1" ? 1 : 0, row.ms || 0, bot
     ).run();
   } catch (_) {}
 }
@@ -109,33 +117,39 @@ export async function rangeReport(env, cfg, q) {
   const me = ["all", "not", "only"].includes(q.me) ? q.me : "all";
   const out = {
     from: q.from || "", to: q.to || "", me, visits: 0, visitsAll: 0, visitsNotMe: 0, pageviews: 0,
-    downloads: 0, fails: 0, dlAll: 0, dlNotMe: 0, conversion: 0, installs: 0,
+    people: 0, bots: 0, botViews: 0, downloads: 0, fails: 0, dlAll: 0, dlNotMe: 0, conversion: 0, installs: 0,
     series: [], unit: "day", hours: [], pages: [], countries: [], sources: [], devices: [], app: { app: 0, web: 0 }, first: null, historySince: null,
   };
   if (!env.STATS) return out;
   await initInsights(env);
   const one = async (sql, ...b) => { try { return ((await env.STATS.prepare(sql).bind(...b).first()) || {}).n || 0; } catch (_) { return 0; } };
   const all = async (sql, ...b) => { try { return (await env.STATS.prepare(sql).bind(...b).all()).results || []; } catch (_) { return []; } };
-  const W = " WHERE ts >= ? AND ts < ?";
+  const W0 = " WHERE ts >= ? AND ts < ?";
+  const W = W0 + " AND COALESCE(bot,0)=0";
   const M = meSql(me);
 
   out.visitsAll = await one("SELECT COUNT(DISTINCT sid) n FROM visits" + W, f, t);
   out.visitsNotMe = await one("SELECT COUNT(DISTINCT sid) n FROM visits" + W + " AND COALESCE(me,0)=0", f, t);
   out.visits = me === "all" ? out.visitsAll : me === "not" ? out.visitsNotMe : out.visitsAll - out.visitsNotMe;
   out.pageviews = await one("SELECT COUNT(*) n FROM visits" + W + M, f, t);
+  out.people = await one("SELECT COUNT(DISTINCT COALESCE(vid,sid)) n FROM visits" + W + M, f, t);
+  out.bots = await one("SELECT COUNT(DISTINCT sid) n FROM visits" + W0 + " AND bot>0", f, t);
+  out.botViews = await one("SELECT COUNT(*) n FROM visits" + W0 + " AND bot>0", f, t);
   out.dlAll = await one("SELECT COUNT(*) n FROM dlog" + W + " AND ok=1", f, t);
   out.dlNotMe = await one("SELECT COUNT(*) n FROM dlog" + W + " AND ok=1 AND COALESCE(me,0)=0", f, t);
   out.downloads = me === "all" ? out.dlAll : me === "not" ? out.dlNotMe : out.dlAll - out.dlNotMe;
   out.fails = await one("SELECT COUNT(*) n FROM dlog" + W + " AND ok=0" + M, f, t);
   out.installs = await one("SELECT COUNT(*) n FROM events WHERE kind='install' AND ts >= ? AND ts < ?", f, t);
+  out.botDl = await one("SELECT COUNT(*) n FROM dlog" + W0 + " AND bot>0", f, t);
   out.conversion = out.visits ? Math.min(100, Math.round((out.downloads / out.visits) * 100)) : 0;
-  out.first = (await all("SELECT MIN(ts) t FROM visits"))[0]?.t || null;
+  out.first = (await all("SELECT MIN(ts) t FROM visits WHERE COALESCE(bot,0)=0"))[0]?.t || null;
   out.historySince = (await all("SELECT MIN(ts) t FROM dlog"))[0]?.t || null;
 
   // span: whole days in the range (all-time starts at the first visit)
   const start = Math.max(f, out.first || f || Date.now());
-  const end = Math.min(t, Date.now() + 864e5);
-  const days = Math.max(1, Math.round((end - start) / 864e5));
+  const end = Math.max(start + 1, Math.min(t, Date.now()));
+  // count whole local calendar days from the first to the last, both included
+  const days = Math.max(1, Math.round((Date.parse(localDay(end - 1, off)) - Date.parse(localDay(start, off))) / 864e5) + 1);
   const fmt = days > 120 ? "%Y-%m" : "%Y-%m-%d";
   out.unit = days > 120 ? "month" : "day";
   const g = `strftime('${fmt}', ts/1000, 'unixepoch', '${mod}')`;
@@ -181,7 +195,7 @@ export async function history(env, cfg, q) {
   if (+q.after) { where += " AND id > ?"; b.push(+q.after); }
   if (q.q) { where += " AND (url LIKE ? OR ip LIKE ? OR ua LIKE ? OR err LIKE ?)"; const s = "%" + String(q.q).slice(0, 60) + "%"; b.push(s, s, s, s); }
   try {
-    const rows = (await env.STATS.prepare("SELECT id,ts,ok,code,url,kind,n,err,ip,device,ua,country,me,app,ms FROM dlog" + where + " ORDER BY id DESC LIMIT ?").bind(...b, lim).all()).results || [];
+    const rows = (await env.STATS.prepare("SELECT id,ts,ok,code,url,kind,n,err,ip,device,ua,country,me,app,ms,bot FROM dlog" + where + " ORDER BY id DESC LIMIT ?").bind(...b, lim).all()).results || [];
     const cnt = await env.STATS.prepare("SELECT COUNT(*) n, SUM(ok) okn FROM dlog WHERE ts >= ? AND ts < ?" + meSql(q.me)).bind(f, t).first();
     return { rows, total: (cnt && cnt.n) || 0, okn: (cnt && cnt.okn) || 0 };
   } catch (_) {
@@ -252,7 +266,7 @@ export async function postViews(env) {
   try {
     const since = Date.now() - 30 * 864e5;
     const rows = (await env.STATS.prepare(
-      "SELECT path, COUNT(*) n, SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) m FROM visits WHERE path LIKE '/blog/%' AND COALESCE(me,0)=0 GROUP BY path"
+      "SELECT path, COUNT(*) n, SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) m FROM visits WHERE path LIKE '/blog/%' AND COALESCE(me,0)=0 AND COALESCE(bot,0)=0 GROUP BY path"
     ).bind(since).all()).results || [];
     const out = {};
     for (const r of rows) out[r.path.slice(6)] = { all: r.n, d30: r.m || 0 };

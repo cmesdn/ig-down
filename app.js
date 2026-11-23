@@ -288,10 +288,12 @@ var ME = (function(){
   } catch (e) { return ''; }
 })();
 window.__ME = ME;
+/* anonymous id that stays on this browser, so one person opening the site twice counts once */
+var VID = (function(){ try { var v = localStorage.getItem('igto_vid'); if (!v) { v = Math.random().toString(36).slice(2, 12) + Date.now().toString(36); localStorage.setItem('igto_vid', v); } return v; } catch (e) { return ''; } })();
 function presence(t){
   if (!SID) return;
   try {
-    var body = JSON.stringify({ t: t, s: SID, p: location.pathname, r: t === 'view' ? document.referrer : '', a: standalone ? 1 : 0, m: ME });
+    var body = JSON.stringify({ t: t, s: SID, v: VID, w: navigator.webdriver ? 1 : 0, p: location.pathname, r: t === 'view' ? document.referrer : '', a: standalone ? 1 : 0, m: ME });
     if (navigator.sendBeacon) navigator.sendBeacon('/api/p', new Blob([body], { type: 'application/json' }));
     else fetch('/api/p', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body, keepalive: true });
   } catch (e) {}

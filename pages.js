@@ -5,6 +5,7 @@
 
 import { getConfig, AD_SLOTS } from "./store.js";
 import { APP_HEAD, SPLASH, APP_CSS, APP_JS } from "./app.js";
+import { howVideo, loopVideo, videoSchema, VIDEO_CSS, VIDEO_JS, VIDEO_POSTS } from "./video.js";
 import { md, headings, plain, listPosts, getPost, getPage, getToolText, PAGE_KEYS } from "./content.js";
 
 /* ===================== content ===================== */
@@ -134,7 +135,7 @@ export async function route(pathname, env) {
 
 export async function render(match, env, origin) {
   const cfg = await getConfig(env);
-  if (match.kind === "tool") return shell(toolBody(match.data, cfg), match.data, cfg, origin, match.data.slug);
+  if (match.kind === "tool") return shell(toolBody(match.data, cfg, origin), match.data, cfg, origin, match.data.slug);
   if (match.kind === "legal") return shell(legalBody(match.data, cfg, match.slug), { title: match.data.title + " — " + cfg.brand.name, desc: match.data.desc, h1: match.data.title }, cfg, origin, match.slug);
   if (match.kind === "bloglist") return shell(blogListBody(match.data), { title: "Blog — Instagram tips and guides", desc: "Guides on downloading Instagram reels, videos and photos, and fixing the problems that come up.", h1: "Blog" }, cfg, origin, "blog");
   if (match.kind === "post") {
@@ -199,7 +200,7 @@ ${APP_HEAD}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-<style>${CSS}${APP_CSS}</style>
+<style>${CSS}${APP_CSS}${VIDEO_CSS}</style>
 ${ga}${adsense}
 </head>
 <body>
@@ -230,13 +231,13 @@ ${adSlot(cfg, "footer")}
 ${adSlot(cfg, "sticky_bottom", "sticky-bottom")}
 <script>${JS}</script>
 <script>window.__APP=${appConfig(cfg)};</script>
-<script>${APP_JS}</script>
+<script>${APP_JS}</script><script>${VIDEO_JS}</script>
 </body></html>`;
 }
 
 /* ===================== bodies ===================== */
 
-function toolBody(t, cfg) {
+function toolBody(t, cfg, origin = "") {
   const steps = [
     ["Copy the link", "Open the post in Instagram, tap Share, then Copy link."],
     ["Paste it above", "Drop the link into the box and press Download."],
@@ -263,10 +264,11 @@ ${lateSlot(cfg, "above_result")}<div id="out"></div>${lateSlot(cfg, "below_resul
   <div class="stepgrid">
     ${steps.map((s, i) => `<div class="step"><span class="num">${i + 1}</span><h3>${esc(s[0])}</h3><p>${esc(s[1])}</p></div>`).join("")}
   </div>
+  ${howVideo()}
 </section>
 ${adSlot(cfg, "in_content")}
 <section class="appsec" id="appsec">
-  <img src="/og.jpg" width="1200" height="630" loading="lazy" decoding="async" alt="IGtoDownload app on a phone">
+  ${loopVideo()}
   <div class="aps-tx">
     <h2>Get the free IGtoDownload app</h2>
     <ul>
@@ -294,7 +296,7 @@ ${adSlot(cfg, "in_content")}
   ${t.faq.map((f) => `<details><summary>${esc(f[0])}</summary><p>${esc(f[1])}</p></details>`).join("")}
 </section>
 ${adSlot(cfg, "native")}
-${schema(t)}`;
+${schema(t)}${origin ? ld(videoSchema(origin)) : ""}`;
 }
 
 function legalBody(d, cfg, slug) {
@@ -359,6 +361,7 @@ function postBody(p, more, origin, cfg) {
   <p class="updated">${fmtDate(p.date)}${p.updated && p.updated !== p.date ? " · Updated " + fmtDate(p.updated) : ""} · ${mins} min read</p>
   ${p.cover ? `<img class="pcover" src="${esc(p.cover)}" alt="${esc(p.title)}" decoding="async">` : ""}
   ${toc.length >= 3 ? `<details class="toc" open><summary>In this guide</summary><ol>${toc.map((h) => `<li><a href="#${h.id}">${esc(h.text)}</a></li>`).join("")}</ol></details>` : ""}
+  ${VIDEO_POSTS.has(p.slug) ? `<div class="mdx-vid">${howVideo("Watch the 1-minute walkthrough")}</div>` : ""}
   <div class="mdx">${midAd(md(p.md), cfg)}</div>
   ${adSlot(cfg, "sidebar", "", "only-desktop")}
   <div class="cta"><h3>Try it now</h3><p>Paste a link on the <a href="/">downloader</a> and save the file in a few seconds.</p></div>

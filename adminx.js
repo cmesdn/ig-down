@@ -40,12 +40,13 @@ export async function apiX(api, request, url, env, lang) {
       const off = tzOff(cfg);
       const today = localDay(Date.now(), off);
       const r = await rangeReport(env, cfg, { from: today, to: today, me: "all" });
+      const rn = await rangeReport(env, cfg, { from: today, to: today, me: "not" });
       const ib = await inbox(env);
       const posts = await listPosts(env, true);
       const cookies = await getCookies(env);
       const live = await liveNow(env);
       return j({
-        today, visitsAll: r.visitsAll, visitsNotMe: r.visitsNotMe, downloads: r.dlNotMe, dlAll: r.dlAll, fails: r.fails,
+        today, visitsAll: r.visitsAll, visitsNotMe: r.visitsNotMe, people: rn.people, bots: r.bots, downloads: r.dlNotMe, dlAll: r.dlAll, fails: rn.fails,
         unread: ib.unread, drafts: posts.filter((p) => p.status === "draft").length,
         cookies: { live: cookies.filter((c) => c.status !== "dead").length, total: cookies.length },
         liveNow: live.now, liveMe: live.me || 0,
@@ -182,7 +183,7 @@ const S = {
     update: "নতুন অ্যাপ ভার্সন আছে", updateBtn: "আপডেট করুন", updHint: "চাপলে Chrome-এ ফাইল নামবে, তারপর ইনস্টল চাপুন। লগইন বা সেটিংস হারাবে না।",
     p_today: "আজ", p_yest: "গতকাল", p_7: "৭ দিন", p_30: "৩০ দিন", p_month: "এই মাস", p_all: "সব সময়", p_custom: "তারিখ বাছুন",
     from: "থেকে", to: "পর্যন্ত", apply: "দেখুন", oneDay: "একদিন দেখতে দুই ঘরে একই তারিখ দিন।",
-    visits: "ভিজিট", pageviews: "পেজ দেখা", conv: "ডাউনলোড হার", installs: "অ্যাপ ইনস্টল",
+    visits: "ভিজিট", pageviews: "পেজ দেখা", people: "আলাদা মানুষ", peopleSub: "একই ফোন/ব্রাউজার একবার", bots: "বট বাদ", botsSub: "ভিজিট · সার্ভার/স্ক্যানার থেকে", bot: "বট", conv: "ডাউনলোড হার", installs: "অ্যাপ ইনস্টল",
     daily: "দিন অনুযায়ী", monthly: "মাস অনুযায়ী", hourly: "ঘণ্টা অনুযায়ী (আপনার সময়)", sources: "কোথা থেকে এসেছে", countries: "দেশ", pages: "কোন পেজ", devices: "ডিভাইস", appsplit: "অ্যাপ বনাম ব্রাউজার",
     liveT: "এই মুহূর্তে সাইটে", liveHint: "গত ৩ মিনিটে যাদের পেজ খোলা ছিল", inMe: "জন আপনি",
     meBox: "আমার নিজের ভিজিট আলাদা রাখা",
@@ -209,7 +210,7 @@ const S = {
     update: "A new app version is available", updateBtn: "Update", updHint: "Chrome downloads the file — then tap Install. You stay signed in.",
     p_today: "Today", p_yest: "Yesterday", p_7: "7 days", p_30: "30 days", p_month: "This month", p_all: "All time", p_custom: "Pick dates",
     from: "From", to: "To", apply: "Show", oneDay: "For a single day, use the same date in both.",
-    visits: "Visits", pageviews: "Page views", conv: "Download rate", installs: "App installs",
+    visits: "Visits", pageviews: "Page views", people: "Unique people", peopleSub: "same phone/browser counted once", bots: "Bots removed", botsSub: "visits · servers/scanners", bot: "Bot", conv: "Download rate", installs: "App installs",
     daily: "By day", monthly: "By month", hourly: "By hour (your time)", sources: "Where they came from", countries: "Countries", pages: "Pages", devices: "Devices", appsplit: "App vs browser",
     liveT: "On the site right now", liveHint: "pages open in the last 3 minutes", inMe: "are you",
     meBox: "Keep my own visits separate",
@@ -258,7 +259,7 @@ export function visitorsTab2(lang) {
   <div class="two" style="margin-top:12px"><div><h4 class="mh">${s.countries}</h4><div id="xLC" class="bars"></div></div><div><h4 class="mh">${s.pages}</h4><div id="xLP" class="bars"></div></div></div>
 </div>
 ${rangeBar("v", "7")}
-<div class="seg xseg xme" id="vMe"><button data-m="all" class="on">${s.withMe}</button><button data-m="not">${s.noMe}</button><button data-m="only">${s.onlyMe}</button></div>
+<div class="seg xseg xme" id="vMe"><button data-m="all">${s.withMe}</button><button data-m="not">${s.noMe}</button><button data-m="only">${s.onlyMe}</button></div>
 <div class="cards" id="xCards"></div>
 <div class="box"><h3 id="xDailyT">${s.daily}</h3><div class="chart2" id="xDaily"></div><div class="legend"><span><i class="lv"></i>${s.visits}</span><span><i class="ld"></i>${s.downloads}</span></div><div class="xaxis" id="xAxis"></div></div>
 <div class="box"><h3>${s.hourly}</h3><div class="chart2 hours" id="xHours"></div><div class="xaxis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div></div>
@@ -414,9 +415,9 @@ function rangeBar(prefix,onChange){
   function save(){try{localStorage.setItem(key,JSON.stringify(st))}catch(e){}}
   paint(); return R;
 }
-function meSeg(id,onChange){
-  var seg=$(id); if(!seg) return null; var key='xm_'+id, v='all';
-  try{v=localStorage.getItem(key)||'all'}catch(e){}
+function meSeg(id,onChange,def){
+  var seg=$(id); if(!seg) return null; var key='xm_'+id, v=def||'all';
+  try{v=localStorage.getItem(key)||v}catch(e){}
   function paint(){[].forEach.call(seg.querySelectorAll('button'),function(b){b.classList.toggle('on',b.dataset.m===v)})}
   seg.onclick=function(e){var b=e.target.closest('button');if(!b)return;v=b.dataset.m;try{localStorage.setItem(key,v)}catch(x){}paint();onChange()};
   paint(); return {get:function(){return v}};
@@ -429,7 +430,7 @@ function loadSummary(){
   if(!$('xSum')) return;
   api('x_summary').then(function(d){
     $('xSum').innerHTML=
-      card('/admin?tab=visitors',S.visitors,num(d.visitsNotMe),S.noMe+' · '+S.withMe+' '+num(d.visitsAll))+
+      card('/admin?tab=visitors',S.visitors,num(d.visitsNotMe),S.noMe+' · '+S.people+' '+num(d.people||0)+(d.bots?' · 🤖 '+num(d.bots):''))+
       card('/admin?tab=history',S.downloads,num(d.downloads),d.fails?('✕ '+num(d.fails)+' '+S.fails):'',d.fails>d.downloads&&d.fails>2?'warn':'')+
       card('/admin?tab=msgs',S.msgs,num(d.unread),'',d.unread?'hot':'')+
       card('/admin?tab=blog',S.drafts,num(d.drafts),'',d.drafts?'warn':'')+
@@ -464,10 +465,12 @@ function loadV(){
   api('x_report'+qs({from:r.from,to:r.to,me:VM.get()}).replace('&','&')).then(function(d){
     var VV=window.__V||{src:{},dev:{},T:{}};
     $('xCards').innerHTML=
+      c2(S.people,num(d.people||0),S.peopleSub)+
       c2(S.visits,num(d.visits),VM.get()==='all'?(S.noMe+': '+num(d.visitsNotMe)):(S.withMe+': '+num(d.visitsAll)))+
       c2(S.pageviews,num(d.pageviews))+
       c2(S.downloads,num(d.downloads),d.fails?('✕ '+num(d.fails)+' '+S.fails):'')+
-      c2(S.conv,num(d.conversion)+'%')+c2(S.installs,num(d.installs));
+      c2(S.conv,num(d.conversion)+'%')+c2(S.installs,num(d.installs))+
+      c2('🤖 '+S.bots,num(d.bots||0),num(d.botViews||0)+' '+S.botsSub);
     $('xDailyT').textContent=d.unit==='month'?S.monthly:S.daily;
     var ser=d.series, max=Math.max(1,Math.max.apply(null,ser.map(function(x){return Math.max(x.visits,x.downloads)}).concat([1])));
     $('xDaily').innerHTML=ser.map(function(x){return '<div class="c" title="'+x.day+': '+x.visits+' / '+x.downloads+'"><span class="v" style="height:'+Math.round(x.visits/max*100)+'%"></span><span class="d" style="height:'+Math.round(x.downloads/max*100)+'%"></span></div>'}).join('')||'<p class="dim">'+S.none+'</p>';
@@ -481,7 +484,7 @@ function loadV(){
 }
 function live(L){ if(!L||!$('xLive'))return; $('xLive').textContent=num(L.now); $('xLiveMe').textContent=L.me?(' · '+num(L.me)+' '+S.inMe):''; $('xLiveAge').textContent=new Date().toLocaleTimeString(); bars('xLC',L.countries); bars('xLP',L.pages); }
 if($('xCards')){
-  VR=rangeBar('v',loadV); VM=meSeg('vMe',loadV); loadV();
+  VR=rangeBar('v',loadV); VM=meSeg('vMe',loadV,'not'); loadV();
   setInterval(function(){if(!document.hidden)api('live').then(live)},15000);
 }
 
@@ -496,7 +499,7 @@ if($('meMark')){
 var HR,HM,hStatus='all',hMin=0,hMax=0,hTimer=null;
 function row(x,isNew){
   var d=new Date(x.ts), kind=x.kind==='carousel'?('🖼×'+x.n):x.kind==='image'?'🖼':x.kind==='video'?'🎬':'';
-  return '<div class="hrow'+(x.ok?'':' f')+(isNew?' new':'')+'"><div class="t"><b>'+(x.ok?'✓':'✕')+'</b>'+(kind?'<span class="k">'+kind+'</span>':'')+(x.me?'<span class="k me">'+S.onlyMe.replace(/শুধু |Only /,'')+'</span>':'')+(x.app?'<span class="k">App</span>':'')+
+  return '<div class="hrow'+(x.ok?'':' f')+(isNew?' new':'')+'"><div class="t"><b>'+(x.ok?'✓':'✕')+'</b>'+(kind?'<span class="k">'+kind+'</span>':'')+(x.me?'<span class="k me">'+S.onlyMe.replace(/শুধু |Only /,'')+'</span>':'')+(x.app?'<span class="k">App</span>':'')+(x.bot?'<span class="k">🤖 '+S.bot+'</span>':'')+
     '<time title="'+d.toLocaleString()+'">'+d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+' · '+ago(x.ts)+'</time></div>'+
     (x.url?'<a class="u" href="'+h(/^https?:/.test(x.url)?x.url:'#')+'" target="_blank" rel="noopener">'+h(x.url)+'</a>':'')+
     '<div class="m"><span>📱 '+h(x.ua||x.device||'—')+'</span><span>🌐 <button data-c="'+h(x.ip)+'">'+h(x.ip||'—')+'</button></span>'+(x.country?'<span>📍 '+h(x.country)+'</span>':'')+(x.ms?'<span>⏱ '+(x.ms/1000).toFixed(1)+'s</span>':'')+'</div>'+
