@@ -175,7 +175,8 @@ ${gsc}
 <meta property="og:title" content="${esc(meta.title)}">
 <meta property="og:description" content="${esc(meta.desc)}">
 <meta property="og:url" content="${esc(canonical)}">
-<meta property="og:site_name" content="${esc(brand)}">
+<meta property="og:site_name" content="Instagram Downloader">
+${canonical.replace(/\/$/, "") === origin ? `<script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@type": "WebSite", name: "Instagram Downloader", alternateName: ["IGtoDownload", "igtodownload.com"], url: origin + "/" })}</script>` : ""}
 <meta property="og:locale" content="en_US">
 <meta property="og:image" content="${esc(meta.image || origin + "/og.jpg?v=3")}">
 <meta property="og:image:secure_url" content="${esc(meta.image || origin + "/og.jpg?v=3")}">
