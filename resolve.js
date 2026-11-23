@@ -382,88 +382,94 @@ async function markCookies(env, all, used, errKind) {
     await notify(env, "\ud83d\udea8 IGtoDownload: ALL cookies are dead. Running on fallbacks only. Add a fresh sessionid in /admin.");
 }
 
-export async function healthCheck(env) {
+
+/* ---------- real login check for a cookie ----------
+ * Public posts often load WITHOUT a login, so "can it open a post?" says nothing
+ * about the cookie. This asks Instagram who is logged in: only a real, live
+ * session gets a username back.
+ * ok: true = logged in, false = fake/expired (definite), null = could not tell. */
+export function sessionParts(cookie) {
+  const m = String(cookie || "").match(/sessionid=([^;\s]+)/);
+  const sid = m ? decodeURIComponent(m[1]) : "";
+  const f = sid.match(/^(\d{3,}):([A-Za-z0-9]{6,}):(\d{1,3}):/);
+  const ds = String(cookie || "").match(/ds_user_id=(\d+)/);
+  return { sid, uid: f ? f[1] : "", valid: !!f && sid.length >= 30, dsMismatch: !!(f && ds && ds[1] !== f[1]) };
+}
+
+export async function checkSession(cookie, net) {
+  const p = sessionParts(cookie);
+  if (!p.sid) return { ok: false, code: "empty", error: "no sessionid in the value" };
+  if (!p.valid) return { ok: false, code: "format", error: "not a real sessionid (wrong format)" };
+  if (p.dsMismatch) return { ok: false, code: "format", error: "ds_user_id does not match the sessionid" };
+  const t0 = Date.now();
+  const tries = [
+    ["https://i.instagram.com/api/v1/accounts/current_user/?edit=true", appHeaders(cookie)],
+    ["https://www.instagram.com/api/v1/accounts/edit/web_form_data/", webHeaders(cookie)],
+  ];
+  let last = { ok: null, code: "net", error: "no answer" };
+  for (const [u, headers] of tries) {
+    try {
+      const r = await go(u, { headers, redirect: "manual" }, net);
+      const txt = await r.text();
+      const ms = Date.now() - t0;
+      let j = null; try { j = JSON.parse(txt); } catch (_) {}
+      const msg = String((j && (j.message || j.error_type)) || "");
+      if (r.ok && j) {
+        const user = j.user || (j.form_data && { username: j.form_data.username, full_name: j.form_data.first_name });
+        if (user && user.username) return { ok: true, code: "ok", username: user.username, name: user.full_name || "", uid: p.uid, ms };
+      }
+      // only a clear answer from Instagram counts as "logged out"; anything vague stays "unknown"
+      if (/login_required|not.?logged|unauthori/i.test(msg) || r.status === 401)
+        return { ok: false, code: "expired", error: "logged out — session expired or invalid", uid: p.uid, ms };
+      if (/checkpoint|challenge/i.test(msg + txt.slice(0, 300)))
+        return { ok: false, code: "checkpoint", error: "account needs verification (checkpoint) — open Instagram and confirm it", uid: p.uid, ms };
+      if (r.status === 429 || /please wait|rate|spam/i.test(msg))
+        last = { ok: null, code: "rate", error: "Instagram asked to slow down — try again in a few minutes", uid: p.uid, ms };
+      else last = { ok: null, code: "net", error: "Instagram answered " + r.status, uid: p.uid, ms };
+    } catch (e) {
+      last = { ok: null, code: "net", error: ((e && e.message) || String(e)).slice(0, 80), uid: p.uid, ms: Date.now() - t0 };
+    }
+  }
+  return last;
+}
+
+export async function healthCheck(env, opts = {}) {
+  // manual check (admin button): a clear "logged out" kills the cookie at once.
+  // automatic check (cron): needs two clear failures in a row, so one odd answer never kills a good cookie.
+  const strikes = opts.manual ? 1 : 2;
   const cfg = await getConfig(env);
   const net = netFrom(cfg);
   const list = await getCookies(env);
-  if (!list.length) return { checked: 0, live: 0, revived: 0, note: "no cookies yet" };
+  if (!list.length) return { checked: 0, live: 0, revived: 0, results: [], note: "no cookies yet" };
 
-  const code = await probeCode(env, cfg);
-  if (!code) {
-    // Nothing safe to test against — do nothing rather than guess and kill the pool.
-    return {
-      checked: 0,
-      live: list.filter((c) => c.status !== "dead").length,
-      revived: 0,
-      note: "No test post known yet. Download one reel on the site, or set a test link in Settings.",
-    };
-  }
-
-  let revived = 0, passed = 0, authFails = 0, otherFails = 0;
-  const pending = [];
-
+  let revived = 0;
+  const results = [];
   for (const c of list) {
-    try {
-      const r = await viaMobileApi(code, c.value, net);
-      if (r && r.items.length) {
-        if (c.status === "dead") revived++;
-        c.status = "ok"; c.fails = 0; c.lastOk = Date.now(); c.lastError = "";
-        passed++;
-      } else {
-        otherFails++;
-        pending.push([c, "empty response"]);
-      }
-    } catch (e) {
-      const msg = ((e && e.message) || "").slice(0, 80);
-      if (isAuthError(msg)) { authFails++; pending.push([c, msg, true]); }
-      else { otherFails++; pending.push([c, msg]); }
+    const r = await checkSession(c.value, net);
+    if (r.ok) {
+      if (c.status === "dead") revived++;
+      c.status = "ok"; c.fails = 0; c.lastOk = Date.now(); c.lastError = "";
+      c.username = r.username; if (r.uid) c.uid = r.uid;
+    } else if (r.ok === false) {
+      c.fails = r.code === "format" ? strikes : (c.fails || 0) + 1;
+      c.lastError = r.error;
+      if (c.fails >= strikes) c.status = "dead"; else if (c.status === "ok") c.status = "warn";
+    } else {
+      c.lastError = r.error; // could not tell — leave the status alone
     }
+    c.lastCheck = Date.now();
+    results.push({ id: c.id, label: c.label, ok: r.ok, code: r.code, username: r.username || c.username || "", error: r.error || "", ms: r.ms || 0, status: c.status });
   }
-
-  // Every cookie failing with the same non-auth error means the test post is
-  // gone, not that the cookies are bad. Leave statuses untouched.
-  const probeBad = passed === 0 && authFails === 0 && otherFails === list.length;
-  if (probeBad) {
-    try { await env.CONFIG.delete("lastgood"); } catch (_) {}
-    for (const [c, msg] of pending) c.lastError = "test post unavailable (" + msg + ")";
-    await saveCookies(env, list);
-    return {
-      checked: list.length,
-      live: list.filter((c) => c.status !== "dead").length,
-      revived: 0,
-      note: "The test post is no longer available, so nothing was marked dead. Download any reel on the site and a new test post is picked automatically.",
-    };
-  }
-
-  for (const [c, msg, isAuth] of pending) {
-    c.lastError = msg;
-    if (!isAuth) continue;
-    c.fails = (c.fails || 0) + 1;
-    if (c.fails >= 5) c.status = "dead";
-    else if (c.status === "ok") c.status = "warn";
-  }
-
   await saveCookies(env, list);
   const live = list.filter((c) => c.status !== "dead").length;
   if (!live) await notify(env, "\ud83d\udea8 IGtoDownload: health check found 0 working cookies.");
-  return { checked: list.length, live, revived };
+  return { checked: list.length, live, revived, results };
 }
 
 export async function testCookie(value, env) {
   const cfg = env ? await getConfig(env) : null;
-  const net = cfg ? netFrom(cfg) : null;
-  const code = env ? await probeCode(env, cfg) : null;
-  if (!code)
-    return { ok: null, ms: 0, error: "No test post known yet — saved without testing. Download one reel on the site first." };
-  const t0 = Date.now();
-  try {
-    const r = await viaMobileApi(code, value, net);
-    return { ok: !!(r && r.items.length), ms: Date.now() - t0 };
-  } catch (e) {
-    const msg = (e && e.message) || String(e);
-    if (!isAuthError(msg)) return { ok: null, ms: Date.now() - t0, error: "Test post unavailable (" + msg + ") — cookie not judged." };
-    return { ok: false, ms: Date.now() - t0, error: msg };
-  }
+  const r = await checkSession(value, cfg ? netFrom(cfg) : null);
+  return { ok: r.ok, code: r.code, ms: r.ms || 0, username: r.username || "", uid: r.uid || "", error: r.ok ? "" : r.error };
 }
 
 export async function diagnose(code, env) {

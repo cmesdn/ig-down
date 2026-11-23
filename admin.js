@@ -293,7 +293,7 @@ async function handleApi(api, request, url, env, lang) {
       return json(st);
     }
     case "health":
-      return json(await healthCheck(env));
+      return json(await healthCheck(env, { manual: true }));
     case "quick":
       return json(await quickCheck(url.searchParams.get("url") || "", env, lang));
     case "diag":
@@ -390,6 +390,12 @@ const M = {
     alerts: "অ্যালার্ট সেটিংস সেভ হয়েছে।",
     appcfg: "অ্যাপ সেটিংস সেভ হয়েছে। এক মিনিটের মধ্যে সাইটে দেখা যাবে।",
     addnj: "কুকি যোগ হয়েছে। টেস্ট করা যায়নি: ",
+    addbad: "❌ কুকি সেভ হয়নি — এটা কাজ করে না: ",
+    ck_format: "এটা আসল sessionid নয় (ফরম্যাট ভুল)। আসল sessionid দেখতে এমন: 71234567%3AAbCdEf%3A12%3A...",
+    ck_expired: "লগইন নেই — কুকির মেয়াদ শেষ বা ভুল। Instagram-এ আবার লগইন করে নতুন sessionid নিন।",
+    ck_checkpoint: "অ্যাকাউন্টে যাচাই (checkpoint) লাগবে — Instagram অ্যাপ খুলে কনফার্ম করুন।",
+    ck_rate: "Instagram একটু থামতে বলছে — কয়েক মিনিট পরে আবার টেস্ট করুন।",
+    ck_ok: "✅ কাজ করছে — লগইন করা অ্যাকাউন্ট: @",
     nothing: "কিছু করার নেই।",
   },
   en: {
@@ -409,6 +415,12 @@ const M = {
     alerts: "Alert settings saved.",
     appcfg: "App settings saved. Live on the site within a minute.",
     addnj: "Cookie added. Could not test it: ",
+    addbad: "❌ Cookie NOT saved — it does not work: ",
+    ck_format: "This is not a real sessionid (wrong format). A real one looks like 71234567%3AAbCdEf%3A12%3A...",
+    ck_expired: "Not logged in — the cookie is expired or wrong. Log in to Instagram again and copy a fresh sessionid.",
+    ck_checkpoint: "The account needs verification (checkpoint) — open the Instagram app and confirm it.",
+    ck_rate: "Instagram asked to slow down — test again in a few minutes.",
+    ck_ok: "✅ Working — logged-in account: @",
     nothing: "Nothing to do.",
   },
 };
@@ -489,18 +501,20 @@ async function runAction(action, form, env, lang) {
     const value = normalizeCookie(String(form.get("value") || ""));
     if (!value) return m.needval;
     const check = await testCookie(value, env);
+    const why = (r) => m["ck_" + r.code] || r.error || "?";
+    // a definite "no" (fake format, logged out, checkpoint) is not saved at all
+    if (check.ok === false) return m.addbad + why(check);
+    const dup = list.find((c) => c.value === value);
+    if (dup) return (lang === "bn" ? "এই কুকি আগেই আছে: " : "This cookie is already saved: ") + dup.label;
     list.push({
       id: "c" + Date.now().toString(36),
-      label: String(form.get("label") || "cookie " + (list.length + 1)).slice(0, 40),
-      value, status: check.ok ? "ok" : "warn", fails: check.ok ? 0 : 1, uses: 0,
-      lastOk: check.ok ? Date.now() : 0, lastError: check.error || "",
+      label: String(form.get("label") || (check.username ? "@" + check.username : "cookie " + (list.length + 1))).slice(0, 40),
+      value, status: "ok", fails: 0, uses: 0, added: Date.now(),
+      lastOk: check.ok ? Date.now() : 0, lastCheck: Date.now(), lastError: check.ok ? "" : check.error || "",
+      username: check.username || "", uid: check.uid || "",
     });
-    // ok === null means the test post was unavailable, so the cookie is unjudged
-    const last = list[list.length - 1];
-    if (check.ok === null) { last.status = "ok"; last.fails = 0; }
     await saveCookies(env, list);
-    if (check.ok === null) return m.addnj + (check.error || "?");
-    return check.ok ? m.addok : m.addfail + (check.error || "?");
+    return check.ok ? m.ck_ok + check.username : m.addnj + why(check);
   }
   if (action === "cookie_del") {
     await saveCookies(env, (await getCookies(env)).filter((c) => c.id !== String(form.get("id") || "")));
@@ -511,17 +525,19 @@ async function runAction(action, form, env, lang) {
     const c = list.find((x) => x.id === String(form.get("id") || ""));
     if (!c) return m.notfound;
     const r = await testCookie(c.value, env);
+    const why = m["ck_" + r.code] || r.error || "?";
+    c.lastCheck = Date.now();
     if (r.ok === null) {
       c.lastError = r.error || "";
       await saveCookies(env, list);
-      return `"${c.label}" — ${r.error || "?"}`;
+      return `"${c.label}" — ${why}`;
     }
     c.status = r.ok ? "ok" : "dead";
     c.fails = r.ok ? 0 : 5;
-    if (r.ok) c.lastOk = Date.now();
-    c.lastError = r.error || "";
+    if (r.ok) { c.lastOk = Date.now(); c.username = r.username; if (r.uid) c.uid = r.uid; }
+    c.lastError = r.ok ? "" : r.error || "";
     await saveCookies(env, list);
-    return r.ok ? `"${c.label}" ✅ (${r.ms} ms)` : `"${c.label}" ❌ ${r.error || "?"}`;
+    return r.ok ? `"${c.label}" ${m.ck_ok}${r.username} (${r.ms} ms)` : `"${c.label}" ❌ ${why}`;
   }
   if (action === "cookie_revive") {
     const list = await getCookies(env);
@@ -581,7 +597,7 @@ async function body(tab, env, msg, lang) {
     <a href="/admin?lang=bn&tab=${tab}" class="${lang === "bn" ? "on" : ""}">বাংলা</a>
     <a href="/admin?lang=en&tab=${tab}" class="${lang === "en" ? "on" : ""}">EN</a>
   </div>
-  <a class="out" href="/admin?logout=1" title="${t.signout}" aria-label="${t.signout}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg></a>
+  <a class="lgout" href="/admin?logout=1" title="${t.signout}" aria-label="${t.signout}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg></a>
 </div>
 <div class="tabs">${order.map((k) => `<a href="/admin?tab=${k}" class="${k === tab ? "on" : ""}">${t.tabs[k]}${k === "msgs" && ib.unread ? `<b class="tbadge">${ib.unread}</b>` : ""}</a>`).join("")}</div>
 ${msg ? `<div class="msg">${esc(msg)}</div>` : ""}
@@ -977,39 +993,77 @@ ${s.errors.length ? `<div class="box"><h3>${t.comerr}</h3><table><tr><th>${t.err
     <a class="btn ghost" href="/" target="_blank">${t.opensite}</a>
   </div>
   ${guide(t.guide, t.g_cache)}
-  <pre id="healthout" class="out hide"></pre>
-</div>`;
+  <pre id="healthout" class="out hide"></pre><div id="healthres"></div>
+</div>
+${ckScript(t)}`;
 }
 
 /* ---------- cookies ---------- */
 
+const CK = {
+  bn: { acc: "অ্যাকাউন্ট", uid: "ইউজার আইডি", sid: "sessionid মান", full: "পুরো কুকি", added: "যোগ হয়েছে", lastcheck: "শেষ চেক", lastok: "শেষ সফল", err: "শেষ সমস্যা", show: "দেখাও", hide: "লুকাও", copy: "কপি", copied: "কপি হয়েছে ✓", tap: "বিস্তারিত দেখতে চাপুন", unknown: "অজানা — আবার টেস্ট করুন",
+    checking: "প্রতিটা কুকিতে আসলেই লগইন আছে কিনা Instagram-এর কাছে জিজ্ঞেস করছি…", hok: "কাজ করছে", hdead: "কাজ করে না — মুছে নতুন দিন", hunk: "বোঝা যায়নি", sum: "চেক হয়েছে {c}টা · কাজ করছে {l}টা", fail: "চেক করা যায়নি। ইন্টারনেট দেখে আবার চেষ্টা করুন।", none: "এখনো কোনো কুকি নেই।",
+    codes: { format: "আসল sessionid নয় (ফরম্যাট ভুল)", expired: "লগআউট — মেয়াদ শেষ বা ভুল কুকি", checkpoint: "অ্যাকাউন্টে যাচাই লাগবে — Instagram অ্যাপে কনফার্ম করুন", rate: "Instagram থামতে বলছে — পরে আবার চেক করুন", net: "Instagram উত্তর দেয়নি — পরে আবার চেক করুন", empty: "sessionid নেই" } },
+  en: { acc: "Account", uid: "User ID", sid: "sessionid value", full: "Full cookie", added: "Added", lastcheck: "Last check", lastok: "Last success", err: "Last problem", show: "Show", hide: "Hide", copy: "Copy", copied: "Copied ✓", tap: "Tap for details", unknown: "unknown — test again",
+    checking: "Asking Instagram whether each cookie is really logged in…", hok: "Working", hdead: "Not working — delete and add a new one", hunk: "Could not tell", sum: "Checked {c} · working {l}", fail: "Check failed. Check the connection and try again.", none: "No cookies yet.",
+    codes: { format: "not a real sessionid (wrong format)", expired: "logged out — expired or wrong cookie", checkpoint: "account needs verification — confirm in the Instagram app", rate: "Instagram asked to slow down — check again later", net: "Instagram did not answer — check again later", empty: "no sessionid" } },
+};
+function ckScript(t) {
+  return `<script>window.__CK=${JSON.stringify(CK[t === L.bn ? "bn" : "en"]).replace(/</g, "\\u003c")};</script>`;
+}
+function maskSid(v) {
+  const m = String(v || "").match(/sessionid=([^;\s]+)/);
+  const s = m ? m[1] : String(v || "");
+  return s.length > 14 ? s.slice(0, 8) + "••••••••" + s.slice(-4) : "••••";
+}
+
 function cookiesTab(list, t) {
-  const rows = list.length
-    ? list.map((c) => `<tr>
-  <td><span class="dot ${c.status}"></span> ${esc(c.label)}</td>
-  <td>${c.status === "ok" ? t.c_working : c.status === "warn" ? t.c_unstable : t.c_dead}</td>
-  <td>${c.uses || 0}</td>
-  <td>${c.lastOk ? ago(c.lastOk) : "—"}</td>
-  <td class="nowrap">
-    <form method="post" action="/admin?do=cookie_test" style="display:inline"><input type="hidden" name="tab" value="cookies"><input type="hidden" name="id" value="${esc(c.id)}"><button class="mini">${t.c_test}</button></form>
-    <form method="post" action="/admin?do=cookie_del" style="display:inline" onsubmit="return confirm('?')"><input type="hidden" name="tab" value="cookies"><input type="hidden" name="id" value="${esc(c.id)}"><button class="mini danger">${t.c_delete}</button></form>
-  </td>
-</tr>${c.lastError ? `<tr class="sub"><td colspan="5">${esc(c.lastError)}</td></tr>` : ""}`).join("")
-    : `<tr><td colspan="5" class="dim">${t.c_none}</td></tr>`;
+  const k = CK[t === L.bn ? "bn" : "en"];
+  const when = (ts) => (ts ? new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dhaka", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) + " · " + ago(ts) : "—");
+  const cards = list.length
+    ? list.map((c) => {
+        const sidm = String(c.value || "").match(/sessionid=([^;\s]+)/);
+        const sid = sidm ? sidm[1] : "";
+        const added = c.added || parseInt(String(c.id || "").slice(1), 36) || 0;
+        const uid = c.uid || (decodeURIComponent(sid).match(/^(\d+):/) || [])[1] || "";
+        return `<details class="ckd">
+  <summary><span class="dot ${c.status}"></span><b>${esc(c.label)}</b>${c.username ? ` <span class="dim">@${esc(c.username)}</span>` : ""}
+    <span class="ckst ${c.status}">${c.status === "ok" ? t.c_working : c.status === "warn" ? t.c_unstable : t.c_dead}</span>
+    <span class="dim ckmeta">${t.c_uses}: ${c.uses || 0} · ${t.c_lastok}: ${c.lastOk ? ago(c.lastOk) : "—"}</span></summary>
+  <div class="ckb">
+    <div class="ckr"><span>${t.c_name}</span><b>${esc(c.label)}</b></div>
+    <div class="ckr"><span>${k.acc}</span><b>${c.username ? `<a href="https://www.instagram.com/${esc(c.username)}/" target="_blank" rel="noopener">@${esc(c.username)}</a>` : k.unknown}</b></div>
+    <div class="ckr"><span>${k.uid}</span><b>${esc(uid) || "—"}</b></div>
+    <div class="ckr"><span>${k.sid}</span><code class="ckv" data-m="${esc(maskSid(c.value))}" data-v="${esc(sid)}">${esc(maskSid(c.value))}</code>
+      <span class="ckbtns"><button type="button" class="mini" onclick="ckShow(this)">${k.show}</button><button type="button" class="mini" onclick="ckCopy(this,'${esc(sid)}')">${k.copy}</button></span></div>
+    ${String(c.value).trim() !== "sessionid=" + sid ? `<div class="ckr"><span>${k.full}</span><span class="ckbtns"><button type="button" class="mini" onclick="ckCopy(this,${esc(JSON.stringify(c.value))})">${k.copy}</button></span></div>` : ""}
+    <div class="ckr"><span>${k.added}</span><b>${when(added)}</b></div>
+    <div class="ckr"><span>${k.lastcheck}</span><b>${when(c.lastCheck)}</b></div>
+    <div class="ckr"><span>${k.lastok}</span><b>${when(c.lastOk)}</b></div>
+    ${c.lastError ? `<div class="ckr"><span>${k.err}</span><b class="bad">${esc(c.lastError)}</b></div>` : ""}
+    <div class="row" style="margin-top:10px">
+      <form method="post" action="/admin?do=cookie_test" style="display:inline"><input type="hidden" name="tab" value="cookies"><input type="hidden" name="id" value="${esc(c.id)}"><button class="mini">${t.c_test}</button></form>
+      <form method="post" action="/admin?do=cookie_del" style="display:inline" onsubmit="return confirm('?')"><input type="hidden" name="tab" value="cookies"><input type="hidden" name="id" value="${esc(c.id)}"><button class="mini danger">${t.c_delete}</button></form>
+    </div>
+  </div>
+</details>`;
+      }).join("")
+    : `<p class="dim">${t.c_none}</p>`;
 
   return `
 <div class="box">
   <h3>${t.c_title}</h3>
   <p class="dim">${t.c_intro}</p>
   ${guide(t.guide, t.g_cookie)}
-  <table class="wide"><tr><th>${t.c_name}</th><th>${t.c_status}</th><th>${t.c_uses}</th><th>${t.c_lastok}</th><th></th></tr>${rows}</table>
+  <p class="dim" style="font-size:12px">${k.tap}</p>
+  <div class="cklist">${cards}</div>
   <div class="row" style="margin-top:12px">
     ${postBtn("cookie_revive", "cookies", t.c_reenable, "ghost")}
     <button class="btn ghost" onclick="runHealth()">${t.c_healthnow}</button>
   </div>
-  <pre id="healthout" class="out hide"></pre>
+  <pre id="healthout" class="out hide"></pre><div id="healthres"></div>
 </div>
-
+${ckScript(t)}
 <div class="box">
   <h3>${t.c_add}</h3>
   <form method="post" action="/admin?do=cookie_add">
@@ -1457,7 +1511,7 @@ body.bare{display:grid;place-items:center;min-height:100vh;padding:20px}
 .lang a{padding:5px 11px;border-radius:7px;color:#8c8c9b;text-decoration:none;font-size:12.5px;font-weight:600}
 .lang a.on{background:#262630;color:#fff}
 .mid-lang{margin:16px auto 0;width:fit-content}
-.out{color:#8c8c9b;text-decoration:none;border:1px solid #26262f;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none}
+.lgout{color:#8c8c9b;text-decoration:none;border:1px solid #26262f;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none}
 @media(max-width:380px){.logo em{display:none}}
 .logo{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tabs{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;
@@ -1500,6 +1554,23 @@ td{padding:9px 8px 9px 0;border-bottom:1px solid #1b1b23;vertical-align:middle}
 tr.sub td{color:#ff7fa5;font-size:12px;padding-top:0;border:0}
 .nowrap{white-space:nowrap;text-align:right}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.cklist{display:grid;gap:8px;margin-top:8px}
+.ckd{border:1px solid var(--line,#2a2a33);border-radius:12px;background:rgba(255,255,255,.02)}
+.ckd summary{cursor:pointer;padding:12px;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ckd summary::-webkit-details-marker{display:none}
+.ckd[open] summary{border-bottom:1px solid var(--line,#2a2a33)}
+.ckst{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:8px;background:rgba(43,217,124,.12);color:#2bd97c}
+.ckst.warn{background:rgba(255,170,60,.12);color:#ffaa3c}.ckst.dead{background:rgba(255,92,138,.12);color:#ff5c8a}
+.ckmeta{width:100%;font-size:12px}
+.ckb{padding:10px 12px 12px}
+.ckr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.06);font-size:13px}
+.ckr>span:first-child{min-width:110px;color:var(--mut,#9a9aa6)}
+.ckr .bad{color:#ff7fa5;font-weight:500}
+.ckv{word-break:break-all;font-size:12px;background:rgba(0,0,0,.25);padding:3px 6px;border-radius:6px;flex:1;min-width:140px}
+.ckbtns{display:inline-flex;gap:6px}
+.hres{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.hres p{margin:2px 0 0;font-size:13px;color:var(--mut,#9a9aa6)}
+.tick.q{background:rgba(255,170,60,.18);color:#ffaa3c}
 .dot.ok{background:#2bd97c}.dot.warn{background:#ffaa3c}.dot.dead{background:#ff5c8a}
 label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px}
 label.check{display:flex;align-items:center;gap:8px;font-weight:500}
@@ -1635,6 +1706,7 @@ code{background:#0d0d13;border:1px solid #26262f;border-radius:5px;padding:1px 5
 .drow .dh{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:700}
 .drow .tick{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;flex:none;color:#0b0b11;font-weight:800}
 .tick.y{background:#2bd97c}.tick.n{background:#ff5c8a}
+.hres .tick{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;flex:none;color:#0b0b11;font-weight:800}
 .drow .who2{margin-left:auto;color:#8c8c9b;font-size:11.5px;font-weight:500}
 .drow p{color:#9a9aa8;font-size:13px;margin-top:6px;line-height:1.6}
 .drow .fix{color:#ffb86b;font-size:13px;margin-top:5px;line-height:1.6}
@@ -1767,12 +1839,23 @@ function fetchDiag(v,target){
 
 /* ---------- health check ---------- */
 function runHealth(){
-  show('healthout','Checking every cookie...');
+  var K=window.__CK||{codes:{}};
+  show('healthout',K.checking||'Checking...'); var box=el('healthres'); if(box)box.innerHTML='';
   fetch('/admin?api=health').then(function(r){return r.json()}).then(function(d){
-    show('healthout','Checked: '+d.checked+'\\nWorking: '+d.live+'\\nRevived: '+(d.revived||0)+(d.note?'\\n\\n'+d.note:''));
+    show('healthout',(K.sum||'Checked {c} · working {l}').replace('{c}',d.checked).replace('{l}',d.live)+(d.note?' — '+d.note:''));
+    if(box&&d.results){box.innerHTML=d.results.map(function(r){
+      var cls=r.ok?'y':r.ok===false?'n':'q', ic=r.ok?'✓':r.ok===false?'×':'?';
+      var why=r.ok?(K.hok+(r.username?' — @'+esc(r.username):'')):((r.ok===false?K.hdead:K.hunk)+': '+esc((K.codes||{})[r.code]||r.error));
+      return '<div class="hres '+cls+'"><span class="tick '+cls+'">'+ic+'</span><div><b>'+esc(r.label)+'</b><p>'+why+'</p></div></div>';
+    }).join('')}
     poll(true);
-  }).catch(function(){show('healthout','Request failed.')});
+    if(d.results&&location.search.indexOf('tab=cookies')>-1)setTimeout(function(){location.reload()},3500);
+  }).catch(function(){show('healthout',K.fail||'Request failed.')});
 }
+function ckShow(b){var c=b.closest('.ckr').querySelector('.ckv');var on=b.getAttribute('data-on')==='1';c.textContent=on?c.getAttribute('data-m'):c.getAttribute('data-v');b.setAttribute('data-on',on?'0':'1');b.textContent=on?(window.__CK||{}).show:(window.__CK||{}).hide}
+function ckCopy(b,v){var K=window.__CK||{},o=b.textContent;function done(){b.textContent=K.copied||'Copied';setTimeout(function(){b.textContent=o},1500)}
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(done,function(){fb()})}else fb();
+  function fb(){var t=document.createElement('textarea');t.value=v;document.body.appendChild(t);t.select();try{document.execCommand('copy');done()}catch(e){}t.remove()}}
 
 /* ---------- push + install ---------- */
 function b64ToU8(b){

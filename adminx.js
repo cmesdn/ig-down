@@ -120,7 +120,7 @@ export async function apiX(api, request, url, env, lang) {
     }
     case "x_apk": {
       const m = await apkMeta(env);
-      if (!m) return j({ error: "none" }, 404);
+      if (!m) return j({ error: "none" });
       return j(Object.assign({}, m, { link: await apkLink(env, m.build) }));
     }
   }
@@ -315,7 +315,17 @@ function dataBox(s) {
 
 export function extrasForSettings(lang) {
   const s = S[lang] || S.bn;
-  return `<div class="box"><h3>${s.backup}</h3><p class="dim">${s.backupHint}</p>
+  const bn = lang !== "en";
+  return `<div class="box" id="apkBox"><h3>📱 ${bn ? "অ্যাডমিন অ্যাপ (APK)" : "Admin app (APK)"}</h3>
+<p class="dim">${bn ? "প্যানেলের সব নতুন ফিচার সাইট থেকে আসে — অ্যাপ নতুন করে ইনস্টল না করলেও দেখা যায়। নতুন APK লাগে শুধু অ্যাপের নিজের অংশ (নোটিফিকেশন, লক) বদলালে।" : "Panel features come from the website — they appear without reinstalling. A new APK is only needed when the app itself (notifications, lock) changes."}</p>
+<div id="apkInfo" class="dim">…</div>
+<div class="row" style="margin-top:10px"><button class="btn" id="apkGet" hidden>${bn ? "সর্বশেষ APK ডাউনলোড" : "Download latest APK"}</button>
+<a class="btn ghost" href="https://github.com/cmesdn/igto-admin/releases/latest" target="_blank" rel="noopener">${bn ? "GitHub Releases খুলুন" : "Open GitHub Releases"}</a></div></div>
+<script>(function(){var bn=${bn ? "true" : "false"},A=window.IGtoApp,cur=A&&A.version?String(A.version()):'';
+fetch('/admin?api=x_apk').then(function(r){return r.json()}).then(function(m){var i=document.getElementById('apkInfo'),g=document.getElementById('apkGet');
+ var t=(cur?(bn?'এই ফোনের অ্যাপ: ':'This phone: ')+cur+' · ':'')+(m&&m.build?((bn?'সাইটে সর্বশেষ: ':'Latest on site: ')+m.version+' ('+Math.round(m.size/1048576*10)/10+' MB)'):(bn?'সাইটে এখনো কোনো APK আপলোড হয়নি — igto-admin repo-তে DRAFT_KEY secret যোগ করলে প্রতিটা build নিজে থেকে এখানে আসবে। ততদিন GitHub Releases থেকে নিন।':'No APK uploaded to the site yet — add the DRAFT_KEY secret to the igto-admin repo and every build will appear here. Until then use GitHub Releases.'));
+ i.textContent=t; if(m&&m.link){g.hidden=false;g.onclick=function(){location.href=m.link}}}).catch(function(){});})();</script>
+<div class="box"><h3>${s.backup}</h3><p class="dim">${s.backupHint}</p>
 <div class="row"><a class="btn" href="/admin?api=x_backup">${s.bDown}</a><label class="btn ghost" style="margin:0">${s.bUp}<input type="file" id="bFile" accept="application/json,.json" hidden></label></div>
 <label class="chk" style="margin-top:8px"><input type="checkbox" id="bSettings"> ${s.bSettings}</label><p id="bOut" class="dim"></p></div>
 <div class="box"><h3>${s.replies}</h3><p class="dim">${s.repHint}</p><div id="repList"></div>
